@@ -245,15 +245,7 @@ func (e *VolcEngine) Synthesize(req *SynthesisRequest) error {
 }
 
 func (e *VolcEngine) Stop() error {
-	if err := e.finishSession(); err != nil {
-		return fmt.Errorf("finish session: %w", err)
-	}
-
-	if e.cancel != nil {
-		e.cancel()
-	}
-
-	return e.waitForRecvLoopStopped()
+	return e.finishSession()
 }
 
 func (e *VolcEngine) Close() error {
