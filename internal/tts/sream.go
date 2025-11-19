@@ -1,6 +1,7 @@
-package audio
+package tts
 
 import (
+	"ava/internal/audio"
 	"errors"
 	"sync"
 )
@@ -11,20 +12,21 @@ var (
 )
 
 type TTSStream struct {
-	queue chan Frame
+	codec audio.CodecOption
+	queue chan audio.Frame
 	done  chan struct{}
 
 	closeOnce sync.Once
 }
 
-func NewTTSStream(size int) *TTSStream {
+func NewTTSStream(codec audio.CodecOption, size int) *TTSStream {
 	return &TTSStream{
-		queue: make(chan Frame, size),
+		queue: make(chan audio.Frame, size),
 		done:  make(chan struct{}),
 	}
 }
 
-func (s *TTSStream) Write(frame Frame) error {
+func (s *TTSStream) Write(frame audio.Frame) error {
 	select {
 	case <-s.done:
 		return ErrStreamClosed
@@ -33,7 +35,7 @@ func (s *TTSStream) Write(frame Frame) error {
 	}
 }
 
-func (s *TTSStream) Read() (*Frame, error) {
+func (s *TTSStream) Read() (*audio.Frame, error) {
 	select {
 	case <-s.done:
 		return nil, ErrStreamClosed
