@@ -135,6 +135,11 @@ func NewVolcStreamEngine(opt VolcEngineOption) *VolcEngine {
 }
 
 func (e *VolcEngine) Initialize(ctx context.Context, stream audio.Stream) (*VolcEngine, error) {
+	if stream == nil {
+		return nil, fmt.Errorf("stream is nil")
+	}
+	e.stream = stream
+
 	e.ctx, e.cancel = context.WithCancel(ctx)
 
 	// ---------------- Dial 超时 ----------------
