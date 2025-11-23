@@ -1,7 +1,6 @@
 package tts
 
 import (
-	"ava/internal/audio"
 	"ava/internal/protocols"
 	"context"
 	"encoding/json"
@@ -106,17 +105,15 @@ type VolcEngineOption struct {
 
 type VolcEngine struct {
 	*BaseEngine
-	opt    VolcEngineOption
-	conn   *websocket.Conn
-	stream audio.Stream
+	opt      VolcEngineOption
+	conn     *websocket.Conn
+	streamer *Streamer
 
 	SessionID string
 	PlayID    int
 	DialogID  string
 	Sequence  int
 	Text      string
-
-	mu sync.RWMutex
 
 	stopped        atomic.Bool
 	closeOnce      sync.Once
@@ -126,19 +123,18 @@ type VolcEngine struct {
 	recvFirstAudio bool
 }
 
-func NewVolcStreamEngine(opt VolcEngineOption) *VolcEngine {
-	return &VolcEngine{
-		BaseEngine:     NewBaseEngine(nil),
-		opt:            opt,
-		recvLoopStopCh: make(chan struct{}),
+func NewVolcEngine(opt VolcEngineOption, s *Streamer) (*VolcEngine, error) {
+	if s == nil {
+		return nil, errors.New("streamer is nil")
 	}
+	return &VolcEngine{
+		BaseEngine: NewBaseEngine(nil),
+		opt:        opt,
+		streamer:   s,
+	}, nil
 }
 
-func (e *VolcEngine) Initialize(ctx context.Context, stream audio.Stream) (*VolcEngine, error) {
-	if stream == nil {
-		return nil, fmt.Errorf("stream is nil")
-	}
-	e.stream = stream
+func (e *VolcEngine) Initialize(ctx context.Context) error {
 
 	e.ctx, e.cancel = context.WithCancel(ctx)
 
@@ -158,19 +154,19 @@ func (e *VolcEngine) Initialize(ctx context.Context, stream audio.Stream) (*Volc
 		if conn != nil {
 			_ = conn.Close()
 		}
-		return nil, fmt.Errorf("dial: %w, resp: %v", err, r)
+		return fmt.Errorf("dial: %w, resp: %v", err, r)
 	}
 	e.conn = conn
 
 	if err := e.startConnection(e.conn); err != nil {
-		return nil, err
+		return err
 	}
 
 	if err := e.startSession(e.conn); err != nil {
-		return nil, err
+		return err
 	}
 	go e.recvLoop()
-	return e, nil
+	return nil
 }
 
 func (e *VolcEngine) recvLoop() {
@@ -199,22 +195,16 @@ Loop:
 			switch {
 			case msg.MsgType == protocols.MsgTypeAudioOnlyServer:
 				if len(msg.Payload) > 0 {
-					frame := audio.Frame{
-						Payload: msg.Payload,
-					}
-
 					if !e.recvFirstAudio {
 						e.recvFirstAudio = true
-						frame.IsFirst = true
 					}
 
-					e.stream.Write(frame)
+					e.streamer.AppendAudio(msg.Payload)
+
 				}
 			case msg.EventType == protocols.EventType_SessionFinished:
-				e.stream.Write(audio.Frame{
-					Payload: nil,
-					IsLast:  true,
-				})
+				e.streamer.EOS = true
+
 				break Loop
 			default:
 				//todo log error message
@@ -224,13 +214,13 @@ Loop:
 	}
 }
 
-func (e *VolcEngine) Synthesize(req *SynthesisRequest) error {
+func (e *VolcEngine) Synthesize(text string) error {
 
 	ttsReq := VolcRequest{
 		Event:     int32(protocols.EventType_TaskRequest),
 		Namespace: "BidirectionalTTS",
 		ReqParams: &VolcReqParams{
-			Text: req.Text,
+			Text: text,
 		},
 	}
 
@@ -339,15 +329,6 @@ func (e *VolcEngine) finishSession() error {
 	// 	return fmt.Errorf("wait session finished: %w", err)
 	// }
 
-	return nil
-}
-
-func (e *VolcEngine) waitForRecvLoopStopped() error {
-	select {
-	case <-e.recvLoopStopCh:
-	case <-time.After(2 * time.Second):
-		return fmt.Errorf("recvLoop stop timeout")
-	}
 	return nil
 }
 
