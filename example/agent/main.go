@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	duckduckgo "github.com/cloudwego/eino-ext/components/tool/duckduckgo/v2"
@@ -69,20 +72,63 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// 运行示例
-	resp, err := agent.Invoke(ctx, []*schema.Message{
-		{
-			Role:    schema.User,
-			Content: "添加一个学习 Eino 的 TODO，同时搜索一下 cloudwego/eino 的仓库地址",
-		},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
+	// 创建读取器
+	reader := bufio.NewReader(os.Stdin)
 
-	// 输出结果
-	for _, msg := range resp {
-		fmt.Println(msg.Content)
+	// 保存对话历史
+	messages := make([]*schema.Message, 0)
+
+	fmt.Println("=== Agent 交互式对话 ===")
+	fmt.Println("输入您的问题（输入 'exit' 或 'quit' 退出）")
+	fmt.Println()
+
+	// 交互式循环
+	for {
+		fmt.Print("您: ")
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			log.Printf("读取输入失败: %v", err)
+			continue
+		}
+
+		// 去除换行符和空格
+		input = strings.TrimSpace(input)
+
+		// 检查退出命令
+		if input == "exit" || input == "quit" || input == "q" {
+			fmt.Println("再见！")
+			break
+		}
+
+		// 忽略空输入
+		if input == "" {
+			continue
+		}
+
+		// 添加用户消息到历史
+		userMsg := &schema.Message{
+			Role:    schema.User,
+			Content: input,
+		}
+		messages = append(messages, userMsg)
+
+		// 调用 agent
+		fmt.Print("Agent: ")
+		resp, err := agent.Invoke(ctx, messages)
+		if err != nil {
+			fmt.Printf("错误: %v\n", err)
+			// 移除最后一条用户消息，因为处理失败
+			messages = messages[:len(messages)-1]
+			continue
+		}
+
+		// 输出结果并更新消息历史
+		for _, msg := range resp {
+			fmt.Println(msg.Content)
+			// 将 agent 的响应也添加到历史中
+			messages = append(messages, msg)
+		}
+		fmt.Println()
 	}
 }
 
