@@ -1,6 +1,7 @@
 package main
 
 import (
+	"ava/internal/tts"
 	"bufio"
 	"context"
 	"fmt"
@@ -9,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
-	duckduckgo "github.com/cloudwego/eino-ext/components/tool/duckduckgo/v2"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
@@ -17,16 +17,46 @@ import (
 
 func main() {
 	ctx := context.Background()
+
+	// 初始化 Speaker 管理器
+	speakerManager := tts.GetGlobalManager()
+	speakerManager.SetConfig(&tts.ToolSpeakerConfig{
+		VoiceType:  "zh_male_lengkugege_emo_v2_mars_bigtts",
+		ResourceID: "seed-tts-1.0",
+		AccessKey:  "n1uNFm540_2oItTs0UsULkWWvuzQiXbD",
+		AppKey:     "5711022755",
+		Encoding:   "pcm",
+		SampleRate: 16000,
+		BitDepth:   16,
+		Channels:   1,
+		SpeedRatio: 1.1,
+	})
+
+	// 确保程序退出时清理资源
+	defer func() {
+		if err := speakerManager.Close(); err != nil {
+			log.Printf("Failed to close speaker manager: %v", err)
+		}
+	}()
+
 	// 创建 DuckDuckGo 工具
-	searchTool, err := duckduckgo.NewTextSearchTool(ctx, &duckduckgo.Config{})
-	if err != nil {
-		log.Fatalf("NewTextSearchTool failed, err=%v", err)
-		return
-	}
+	// searchTool, err := duckduckgo.NewTextSearchTool(ctx, &duckduckgo.Config{})
+	// if err != nil {
+	// 	log.Fatalf("NewTextSearchTool failed, err=%v", err)
+	// 	return
+	// }
+
+	// 创建 Speech Tools（不包括 say_text，因为它会在响应后自动调用）
+	pauseSpeechTool := NewPauseSpeechTool(speakerManager)
+	resumeSpeechTool := NewResumeSpeechTool(speakerManager)
+	stopSpeechTool := NewStopSpeechTool(speakerManager)
+
 	// 初始化 tools
 	todoTools := []tool.BaseTool{
 		&ListTodoTool{}, // 实现Tool接口
-		searchTool,
+		pauseSpeechTool,
+		resumeSpeechTool,
+		stopSpeechTool,
 	}
 
 	// 创建并配置 ChatModel
@@ -60,14 +90,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// 构建完整的处理链
-	chain := compose.NewChain[[]*schema.Message, []*schema.Message]()
-	chain.
-		AppendChatModel(chatModel, compose.WithNodeName("chat_model")).
-		AppendToolsNode(todoToolsNode, compose.WithNodeName("tools"))
-
-	// 编译并运行 chain
-	agent, err := chain.Compile(ctx)
+	// 创建一个只包含 ChatModel 的 chain（用于手动处理逻辑）
+	// ChatModel 输出 *schema.Message，所以 chain 类型应该是 []*schema.Message -> *schema.Message
+	chain := compose.NewChain[[]*schema.Message, *schema.Message]()
+	chain.AppendChatModel(chatModel, compose.WithNodeName("chat_model"))
+	chatModelAgent, err := chain.Compile(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -75,8 +102,22 @@ func main() {
 	// 创建读取器
 	reader := bufio.NewReader(os.Stdin)
 
-	// 保存对话历史
-	messages := make([]*schema.Message, 0)
+	// 保存对话历史，首先添加系统提示词
+	systemPrompt := `你是一个智能语音助手。你的所有回复都会自动通过语音播放给用户，所以你只需要正常回复文本内容即可。
+
+你可以使用以下工具来控制语音播放：
+- pause_speech: 暂停当前播放
+- resume_speech: 恢复播放
+- stop_speech: 停止播放
+
+注意：你不需要手动调用语音合成功能，系统会自动将你的文本回复转换为语音播放。`
+
+	messages := []*schema.Message{
+		{
+			Role:    schema.System,
+			Content: systemPrompt,
+		},
+	}
 
 	fmt.Println("=== Agent 交互式对话 ===")
 	fmt.Println("输入您的问题（输入 'exit' 或 'quit' 退出）")
@@ -112,9 +153,9 @@ func main() {
 		}
 		messages = append(messages, userMsg)
 
-		// 调用 agent
+		// 手动实现 agent 循环逻辑
 		fmt.Print("Agent: ")
-		resp, err := agent.Invoke(ctx, messages)
+		resp, err := invokeAgent(ctx, chatModelAgent, todoToolsNode, messages)
 		if err != nil {
 			fmt.Printf("错误: %v\n", err)
 			// 移除最后一条用户消息，因为处理失败
@@ -122,14 +163,72 @@ func main() {
 			continue
 		}
 
-		// 输出结果并更新消息历史
+		// 输出结果并更新消息历史，同时自动播放语音
+		var assistantContent strings.Builder
 		for _, msg := range resp {
-			fmt.Println(msg.Content)
-			// 将 agent 的响应也添加到历史中
-			messages = append(messages, msg)
+			// 只处理 Assistant 角色的消息内容
+			if msg.Role == schema.Assistant && msg.Content != "" {
+				fmt.Println(msg.Content)
+				assistantContent.WriteString(msg.Content)
+
+				// 将 agent 的响应添加到历史中
+				messages = append(messages, msg)
+			} else {
+				// 其他类型的消息（如 tool call 结果）也添加到历史
+				messages = append(messages, msg)
+			}
+			log.Printf("msg: %+v", msg)
 		}
+
+		// 自动播放 Assistant 的回复内容
+		if assistantContent.Len() > 0 {
+			text := assistantContent.String()
+			speaker, err := speakerManager.GetSpeaker(ctx)
+			if err != nil {
+				log.Printf("获取 Speaker 失败，跳过语音播放: %v", err)
+			} else {
+				// 播放文本，end=true 表示这是完整的回复
+				if err := speaker.Say(text, true); err != nil {
+					log.Printf("语音播放失败: %v", err)
+				}
+			}
+		}
+
 		fmt.Println()
 	}
+}
+
+// invokeAgent 手动实现 agent 循环逻辑：ChatModel -> ToolsNode (如果有 tool call) -> ChatModel
+func invokeAgent(ctx context.Context, chatModelAgent compose.Runnable[[]*schema.Message, *schema.Message], toolsNode *compose.ToolsNode, messages []*schema.Message) ([]*schema.Message, error) {
+	maxIterations := 10 // 防止无限循环
+	for i := 0; i < maxIterations; i++ {
+		// 调用 ChatModel（返回单个消息）
+		chatMsg, err := chatModelAgent.Invoke(ctx, messages)
+		if err != nil {
+			return nil, fmt.Errorf("ChatModel invoke failed: %w", err)
+		}
+
+		// 检查是否有 tool call
+		hasToolCall := chatMsg.Role == schema.Assistant && len(chatMsg.ToolCalls) > 0
+
+		// 如果没有 tool call，直接返回
+		if !hasToolCall {
+			return []*schema.Message{chatMsg}, nil
+		}
+
+		// 有 tool call，调用 ToolsNode
+		toolResp, err := toolsNode.Invoke(ctx, chatMsg)
+		if err != nil {
+			return nil, fmt.Errorf("ToolsNode invoke failed: %w", err)
+		}
+
+		// 将 ChatModel 和 ToolsNode 的响应都添加到消息历史
+		messages = append(messages, chatMsg)
+		messages = append(messages, toolResp...)
+		// 继续循环，让 ChatModel 处理 tool 的结果
+	}
+
+	return nil, fmt.Errorf("max iterations reached")
 }
 
 type ListTodoTool struct{}
