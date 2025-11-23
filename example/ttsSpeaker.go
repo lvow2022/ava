@@ -4,6 +4,7 @@ import (
 	"ava/internal/tts"
 	"context"
 	"log"
+	"time"
 
 	"github.com/gopxl/beep"
 )
@@ -13,14 +14,15 @@ func main() {
 	ttsStreamer := tts.NewStreamer(beep.SampleRate(16000), 1)
 
 	ttsOpt := tts.VolcEngineOption{
-		VoiceType:  "zh_female_mizai_saturn_bigtts",
-		ResourceID: "seed-tts-2.0",
+		VoiceType:  "zh_male_lengkugege_emo_v2_mars_bigtts",
+		ResourceID: "seed-tts-1.0",
 		AccessKey:  "n1uNFm540_2oItTs0UsULkWWvuzQiXbD",
 		AppKey:     "5711022755",
 		Encoding:   "pcm",
 		SampleRate: 16000,
 		BitDepth:   16,
 		Channels:   1,
+		SpeedRatio: 1.1,
 	}
 
 	ttsEngine, err := tts.NewVolcEngine(ttsOpt, ttsStreamer)
@@ -39,10 +41,16 @@ func main() {
 	speaker.Play(ttsStreamer)
 
 	// 合成并播放语音
-	if err := speaker.Say("Hello, world!"); err != nil {
+	if err := speaker.Say("欢迎来到美丽新世界!", false); err != nil {
 		log.Fatalf("Failed to synthesize: %v", err)
 	}
 
-	// 停止播放
+	if err := speaker.Say("让我们一起跳舞吧!", true); err != nil {
+		log.Fatalf("Failed to synthesize: %v", err)
+	}
+
+	// 等待3秒后停止播放
+	<-time.After(3 * time.Second)
 	speaker.Stop()
+	select {}
 }

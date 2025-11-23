@@ -17,11 +17,16 @@ func NewSpeaker(tts Engine) *Speaker {
 	}
 }
 
-func (s *Speaker) Say(text string) error {
+func (s *Speaker) Say(text string, end bool) error {
 	err := s.tts.Synthesize(text)
 	if err != nil {
 		return err
 	}
+
+	if end {
+		return s.tts.Stop()
+	}
+
 	return nil
 }
 
@@ -45,7 +50,7 @@ func (s *Speaker) Resume() {
 
 func (s *Speaker) Stop() {
 	speaker.Lock()
+	s.streamer.Close() // 立即停止流，即使缓冲区中还有数据
 	s.tts.Stop()
-	s.streamer.EOS = true
 	speaker.Unlock()
 }

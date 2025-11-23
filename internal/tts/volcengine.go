@@ -125,9 +125,10 @@ func NewVolcEngine(opt VolcEngineOption, s *Streamer) (*VolcEngine, error) {
 		return nil, errors.New("streamer is nil")
 	}
 	return &VolcEngine{
-		BaseEngine: NewBaseEngine(nil),
-		opt:        opt,
-		streamer:   s,
+		BaseEngine:     NewBaseEngine(nil),
+		opt:            opt,
+		streamer:       s,
+		recvLoopStopCh: make(chan struct{}),
 	}, nil
 }
 
@@ -143,6 +144,7 @@ func (e *VolcEngine) Initialize(ctx context.Context) error {
 	header.Set("X-Api-Access-Key", e.opt.AccessKey)
 	header.Set("X-Api-Resource-Id", e.opt.ResourceID)
 	header.Set("X-Api-Connect-Id", e.SessionID)
+	header.Set("X-Control-Require-Usage-Tokens-Return", "*")
 	endpoint := "wss://openspeech.bytedance.com/api/v3/tts/bidirection"
 	// ----------------dial server----------------
 	conn, r, err := websocket.DefaultDialer.DialContext(dialCtx, endpoint, header)
@@ -179,11 +181,12 @@ Loop:
 			return
 		default:
 			msg, err := protocols.ReceiveMessage(e.conn)
+			logrus.Info("volcengine: recv message: ", msg.String())
 			if err != nil {
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure) || strings.Contains(err.Error(), "use of closed network connection") {
-
+					logrus.Info("volcengine: recv message error: ", err)
 				} else {
-					// todo log conn error
+					logrus.Error("volcengine: recv message error: ", err)
 				}
 
 				break Loop
@@ -194,17 +197,14 @@ Loop:
 					if !e.recvFirstAudio {
 						e.recvFirstAudio = true
 					}
-
 					e.streamer.AppendAudio(msg.Payload)
 
 				}
 			case msg.EventType == protocols.EventType_SessionFinished:
 				e.streamer.EOS = true
-
 				break Loop
 			default:
 				//todo log error message
-				break Loop
 			}
 		}
 	}

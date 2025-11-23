@@ -2,10 +2,13 @@ package tts
 
 import (
 	"encoding/binary"
+	"errors"
 	"sync"
 
 	"github.com/gopxl/beep"
 )
+
+var ErrStreamStopped = errors.New("stream stopped")
 
 type Streamer struct {
 	mu sync.Mutex
@@ -15,6 +18,7 @@ type Streamer struct {
 
 	EOS    bool
 	Paused bool
+	err    error // 用于立即停止流
 }
 
 func NewStreamer(sampleRate beep.SampleRate, channels int) *Streamer {
@@ -41,8 +45,13 @@ func (s *Streamer) Stream(samples [][2]float64) (int, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// 如果设置了错误，立即停止流（即使 buf 中还有数据）
+	if s.err != nil {
+		return 0, false
+	}
+
 	if s.Paused {
-		return 0, true // 暂停 → 告诉 speaker “暂时没数据”
+		return 0, true // 暂停 → 告诉 speaker "暂时没数据"
 	}
 
 	bytesPerSample := int(s.format.NumChannels) * int(s.format.Precision)
@@ -92,4 +101,15 @@ func pcm16ToFloat(b []byte) float64 {
 	return float64(v) / 32768.0
 }
 
-func (s *Streamer) Err() error { return nil }
+func (s *Streamer) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+// Close 立即停止流，即使缓冲区中还有数据
+func (s *Streamer) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = ErrStreamStopped
+}
