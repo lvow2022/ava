@@ -13,10 +13,10 @@ func main() {
 	ttsStreamer := tts.NewStreamer(beep.SampleRate(16000), 1)
 
 	ttsOpt := tts.VolcEngineOption{
-		VoiceType:  "zh-CN-XiaoxiaoNeural",
-		ResourceID: "1234567890",
-		AccessKey:  "1234567890",
-		AppKey:     "1234567890",
+		VoiceType:  "zh_female_mizai_saturn_bigtts",
+		ResourceID: "seed-tts-2.0",
+		AccessKey:  "n1uNFm540_2oItTs0UsULkWWvuzQiXbD",
+		AppKey:     "5711022755",
 		Encoding:   "pcm",
 		SampleRate: 16000,
 		BitDepth:   16,

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
@@ -94,8 +95,8 @@ type VolcReqEngineParams struct {
 type VolcEngineOption struct {
 	VoiceType  string  `json:"voiceType"`
 	ResourceID string  `json:"resourceID"`
-	AccessKey  string  `json:"accessKey" env:"VOLCE_TTS_LLM_TOKEN"`
-	AppKey     string  `json:"appKey" env:"VOLCE_TTS_LLM_APP_ID"`
+	AccessKey  string  `json:"accessKey" `
+	AppKey     string  `json:"appKey"`
 	Encoding   string  `json:"encoding" default:"pcm"`
 	SampleRate int     `json:"sampleRate"  default:"16000"`
 	BitDepth   int     `json:"bitDepth"  default:"16"`
@@ -110,10 +111,6 @@ type VolcEngine struct {
 	streamer *Streamer
 
 	SessionID string
-	PlayID    int
-	DialogID  string
-	Sequence  int
-	Text      string
 
 	stopped        atomic.Bool
 	closeOnce      sync.Once
@@ -135,9 +132,8 @@ func NewVolcEngine(opt VolcEngineOption, s *Streamer) (*VolcEngine, error) {
 }
 
 func (e *VolcEngine) Initialize(ctx context.Context) error {
-
 	e.ctx, e.cancel = context.WithCancel(ctx)
-
+	e.SessionID = uuid.New().String()
 	// ---------------- Dial 超时 ----------------
 	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -147,9 +143,9 @@ func (e *VolcEngine) Initialize(ctx context.Context) error {
 	header.Set("X-Api-Access-Key", e.opt.AccessKey)
 	header.Set("X-Api-Resource-Id", e.opt.ResourceID)
 	header.Set("X-Api-Connect-Id", e.SessionID)
-	addr := fmt.Sprintf("wss://%s/api/%s", "openspeech.bytedance.com", "v3/tts/bidirection")
+	endpoint := "wss://openspeech.bytedance.com/api/v3/tts/bidirection"
 	// ----------------dial server----------------
-	conn, r, err := websocket.DefaultDialer.DialContext(dialCtx, addr, header)
+	conn, r, err := websocket.DefaultDialer.DialContext(dialCtx, endpoint, header)
 	if err != nil {
 		if conn != nil {
 			_ = conn.Close()

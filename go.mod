@@ -3,6 +3,7 @@ module ava
 go 1.22.3
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/gopxl/beep v1.4.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/sirupsen/logrus v1.9.3
