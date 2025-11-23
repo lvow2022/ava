@@ -188,7 +188,9 @@ func main() {
 				log.Printf("获取 Speaker 失败，跳过语音播放: %v", err)
 			} else {
 				// 播放文本，end=true 表示这是完整的回复
-				if err := speaker.Say(text, true); err != nil {
+				// 注意：不要调用 Stop()，因为这会结束 session，导致后续调用失败
+				// end=true 只是标记文本结束，但 session 应该保持运行以便后续对话
+				if err := speaker.Say(text, false); err != nil {
 					log.Printf("语音播放失败: %v", err)
 				}
 			}
