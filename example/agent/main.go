@@ -4,13 +4,13 @@ import (
 	"ava/internal/tts"
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
-	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 )
@@ -39,52 +39,21 @@ func main() {
 		}
 	}()
 
-	// 创建 DuckDuckGo 工具
-	// searchTool, err := duckduckgo.NewTextSearchTool(ctx, &duckduckgo.Config{})
-	// if err != nil {
-	// 	log.Fatalf("NewTextSearchTool failed, err=%v", err)
-	// 	return
-	// }
-
-	// 创建 Speech Tools（不包括 say_text，因为它会在响应后自动调用）
-	pauseSpeechTool := NewPauseSpeechTool(speakerManager)
-	resumeSpeechTool := NewResumeSpeechTool(speakerManager)
-	stopSpeechTool := NewStopSpeechTool(speakerManager)
-
-	// 初始化 tools
-	todoTools := []tool.BaseTool{
-		&ListTodoTool{}, // 实现Tool接口
-		pauseSpeechTool,
-		resumeSpeechTool,
-		stopSpeechTool,
+	// 获取 Speaker 并创建 TagAwareSpeaker
+	speaker, err := speakerManager.GetSpeaker(ctx)
+	if err != nil {
+		log.Fatalf("获取 Speaker 失败: %v", err)
 	}
+	tagAwareSpeaker := tts.NewTagAwareSpeaker(speaker)
 
-	// 创建并配置 ChatModel
+	// 创建处理用户输入的工具
+	handleInputTool := NewHandleUserInputTool(speakerManager)
+
+	// 创建并配置 ChatModel（不绑定任何工具）
 	chatModel, err := openai.NewChatModel(context.Background(), &openai.ChatModelConfig{
 		BaseURL: "https://ark.cn-beijing.volces.com/api/v3",
 		Model:   "doubao-1-5-pro-32k-250115",
 		APIKey:  "42189dbf-a896-4162-b9d8-3dccf4b1ded5",
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	// 获取工具信息并绑定到 ChatModel
-	toolInfos := make([]*schema.ToolInfo, 0, len(todoTools))
-	for _, tool := range todoTools {
-		info, err := tool.Info(ctx)
-		if err != nil {
-			log.Fatal(err)
-		}
-		toolInfos = append(toolInfos, info)
-	}
-	err = chatModel.BindTools(toolInfos)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// 创建 tools 节点
-	todoToolsNode, err := compose.NewToolNode(context.Background(), &compose.ToolsNodeConfig{
-		Tools: todoTools,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -103,14 +72,38 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 
 	// 保存对话历史，首先添加系统提示词
-	systemPrompt := `你是一个智能语音助手。你的所有回复都会自动通过语音播放给用户，所以你只需要正常回复文本内容即可。
+	systemPrompt := `你是一个智能语音助手。你的回复会通过语音播放给用户。
 
-你可以使用以下工具来控制语音播放：
-- pause_speech: 暂停当前播放
-- resume_speech: 恢复播放
-- stop_speech: 停止播放
+重要工作流程：
+1. 当用户输入时，你应该首先调用 get_playback_progress 工具来查询当前播放进度
+2. 根据工具返回的进度信息（is_playing, remaining_time, played_text 等）自主判断。
 
-注意：你不需要手动调用语音合成功能，系统会自动将你的文本回复转换为语音播放。`
+可用的 XML 标签：
+- <say>文本内容</say>: 将标签内的文本内容转换为语音播放。所有需要播放给用户的文本都必须放在此标签内。
+- <stop></stop>: 立即停止当前正在播放的语音。
+
+可用的工具：
+- get_playback_progress: 查询当前播放进度信息，包括：
+  * is_playing: 是否正在播放
+  * current_time: 当前播放时间（秒）
+  * total_time: 总时长（秒）
+  * remaining_time: 剩余时间（秒）
+  * percentage: 播放进度百分比
+  * played_text: 已播放的文本（所有已播放完成的词）
+  * current_word: 当前正在播放的词（如果有）
+
+使用规则：
+1. 收到用户输入时，建议先调用 get_playback_progress 工具了解当前播放状态
+2. 根据进度信息自主判断是否需要停止当前播放
+3. 所有需要播放给用户的文本都必须放在 <say> 标签内
+4. 不要在 <say> 标签外放置任何需要播放的文本
+5. 如果用户输入很重要或紧急，即使播放刚开始也应该立即停止并响应
+
+示例流程：
+用户输入："你好"
+1. 调用 get_playback_progress() 查询进度
+2. 如果返回 is_playing: true, remaining_time: 3.5，则：<stop></stop><say>你好！有什么可以帮助你的吗？</say>
+3. 如果返回 is_playing: false，则直接：<say>你好！有什么可以帮助你的吗？</say>`
 
 	messages := []*schema.Message{
 		{
@@ -146,16 +139,32 @@ func main() {
 			continue
 		}
 
+		// 先调用工具查询播放进度
+		toolArgs := map[string]interface{}{}
+		toolArgsJSON, _ := json.Marshal(toolArgs)
+		toolResult, err := handleInputTool.InvokableRun(ctx, string(toolArgsJSON))
+		if err != nil {
+			log.Printf("调用 get_playback_progress 工具失败: %v", err)
+		} else {
+			fmt.Printf("[播放进度] %s\n", toolResult)
+		}
+
+		// 将工具结果和用户输入一起添加到消息中，让 LLM 根据进度信息自主判断
+		userMsgContent := input
+		if toolResult != "" {
+			userMsgContent = fmt.Sprintf("当前播放进度: %s\n\n用户输入: %s", toolResult, input)
+		}
+
 		// 添加用户消息到历史
 		userMsg := &schema.Message{
 			Role:    schema.User,
-			Content: input,
+			Content: userMsgContent,
 		}
 		messages = append(messages, userMsg)
 
-		// 手动实现 agent 循环逻辑
+		// 调用 ChatModel
 		fmt.Print("Agent: ")
-		resp, err := invokeAgent(ctx, chatModelAgent, todoToolsNode, messages)
+		chatMsg, err := chatModelAgent.Invoke(ctx, messages)
 		if err != nil {
 			fmt.Printf("错误: %v\n", err)
 			// 移除最后一条用户消息，因为处理失败
@@ -163,93 +172,18 @@ func main() {
 			continue
 		}
 
-		// 输出结果并更新消息历史，同时自动播放语音
-		var assistantContent strings.Builder
-		for _, msg := range resp {
-			// 只处理 Assistant 角色的消息内容
-			if msg.Role == schema.Assistant && msg.Content != "" {
-				fmt.Println(msg.Content)
-				assistantContent.WriteString(msg.Content)
+		// 输出并处理 Assistant 的回复
+		if chatMsg.Role == schema.Assistant && chatMsg.Content != "" {
+			fmt.Println(chatMsg.Content)
 
-				// 将 agent 的响应添加到历史中
-				messages = append(messages, msg)
-			} else {
-				// 其他类型的消息（如 tool call 结果）也添加到历史
-				messages = append(messages, msg)
-			}
-			log.Printf("msg: %+v", msg)
-		}
+			// 使用 TagAwareSpeaker 处理包含 XML 标签的响应
+			// Feed 方法会解析 XML 标签并自动调用相应的 speaker 方法
+			tagAwareSpeaker.Feed(chatMsg.Content)
 
-		// 自动播放 Assistant 的回复内容
-		if assistantContent.Len() > 0 {
-			text := assistantContent.String()
-			speaker, err := speakerManager.GetSpeaker(ctx)
-			if err != nil {
-				log.Printf("获取 Speaker 失败，跳过语音播放: %v", err)
-			} else {
-				// 播放文本，end=true 表示这是完整的回复
-				// 注意：不要调用 Stop()，因为这会结束 session，导致后续调用失败
-				// end=true 只是标记文本结束，但 session 应该保持运行以便后续对话
-				if err := speaker.Say(text, false); err != nil {
-					log.Printf("语音播放失败: %v", err)
-				}
-			}
+			// 将 agent 的响应添加到历史中
+			messages = append(messages, chatMsg)
 		}
 
 		fmt.Println()
 	}
-}
-
-// invokeAgent 手动实现 agent 循环逻辑：ChatModel -> ToolsNode (如果有 tool call) -> ChatModel
-func invokeAgent(ctx context.Context, chatModelAgent compose.Runnable[[]*schema.Message, *schema.Message], toolsNode *compose.ToolsNode, messages []*schema.Message) ([]*schema.Message, error) {
-	maxIterations := 10 // 防止无限循环
-	for i := 0; i < maxIterations; i++ {
-		// 调用 ChatModel（返回单个消息）
-		chatMsg, err := chatModelAgent.Invoke(ctx, messages)
-		if err != nil {
-			return nil, fmt.Errorf("ChatModel invoke failed: %w", err)
-		}
-
-		// 检查是否有 tool call
-		hasToolCall := chatMsg.Role == schema.Assistant && len(chatMsg.ToolCalls) > 0
-
-		// 如果没有 tool call，直接返回
-		if !hasToolCall {
-			return []*schema.Message{chatMsg}, nil
-		}
-
-		// 有 tool call，调用 ToolsNode
-		toolResp, err := toolsNode.Invoke(ctx, chatMsg)
-		if err != nil {
-			return nil, fmt.Errorf("ToolsNode invoke failed: %w", err)
-		}
-
-		// 将 ChatModel 和 ToolsNode 的响应都添加到消息历史
-		messages = append(messages, chatMsg)
-		messages = append(messages, toolResp...)
-		// 继续循环，让 ChatModel 处理 tool 的结果
-	}
-
-	return nil, fmt.Errorf("max iterations reached")
-}
-
-type ListTodoTool struct{}
-
-func (lt *ListTodoTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
-	return &schema.ToolInfo{
-		Name: "list_todo",
-		Desc: "List all todo items",
-		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
-			"finished": {
-				Desc:     "filter todo items if finished",
-				Type:     schema.Boolean,
-				Required: false,
-			},
-		}),
-	}, nil
-}
-
-func (lt *ListTodoTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	// Mock调用逻辑
-	return `{"todos": [{"id": "1", "content": "在2024年12月10日之前完成Eino项目演示文稿的准备工作", "started_at": 1717401600, "deadline": 1717488000, "done": false}]}`, nil
 }

@@ -63,7 +63,5 @@ func NewTagAwareSpeaker(s *Speaker) *TagAwareSpeaker {
 
 // Feed 输入 LLM 输出 XML
 func (tas *TagAwareSpeaker) Feed(xmlChunk string) {
-	if err := tas.parser.Feed(xmlChunk); err != nil {
-		fmt.Println("TagAwareSpeaker Feed 错误:", err)
-	}
+	tas.parser.Feed(xmlChunk)
 }

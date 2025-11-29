@@ -1,81 +1,140 @@
 package tts
 
 import (
-	"encoding/xml"
-	"io"
+	"regexp"
 	"strings"
 )
 
-// TagCallbacks 定义标签的回调
 type TagCallbacks struct {
 	OnStart  func(attrs map[string]string)
 	OnMiddle func(text string)
 	OnEnd    func()
 }
 
-// TagParser 解析器
-type TagParser struct {
-	tags map[string]TagCallbacks
+type registeredTag struct {
+	name string
+	cb   TagCallbacks
 }
 
-// NewTagParser 创建解析器
+type TagParser struct {
+	tags        map[string]registeredTag
+	buffer      string
+	activeTag   *registeredTag
+	activeAttrs map[string]string
+}
+
 func NewTagParser() *TagParser {
 	return &TagParser{
-		tags: make(map[string]TagCallbacks),
+		tags: make(map[string]registeredTag),
 	}
 }
 
-// RegisterTag 注册一个标签及其回调
 func (p *TagParser) RegisterTag(name string, cb TagCallbacks) {
-	p.tags[name] = cb
+	p.tags[name] = registeredTag{name: name, cb: cb}
 }
 
-// Feed 解析 XML 数据（可流式调用多次）
-func (p *TagParser) Feed(data string) error {
-	decoder := xml.NewDecoder(strings.NewReader(data))
+var startTagRe = regexp.MustCompile(`^<([a-zA-Z0-9]+)([^>]*)>`)
+var endTagRe = regexp.MustCompile(`^</([a-zA-Z0-9]+)>`)
+var attrRe = regexp.MustCompile(`([a-zA-Z0-9_-]+)="([^"]*)"`)
 
-	var activeTag string
-	var attrs map[string]string
+func parseAttrs(s string) map[string]string {
+	m := make(map[string]string)
+	all := attrRe.FindAllStringSubmatch(s, -1)
+	for _, a := range all {
+		m[a[1]] = a[2]
+	}
+	return m
+}
 
+func (p *TagParser) Feed(chunk string) {
+	p.buffer += chunk
+	p.parse()
+}
+
+func (p *TagParser) parse() {
 	for {
-		tok, err := decoder.Token()
-		if err != nil {
-			if err == io.EOF {
-				return nil
+		if p.activeTag == nil {
+			// 查找下一个 '<'
+			i := strings.Index(p.buffer, "<")
+			if i == -1 {
+				return
 			}
-			return err
+
+			// 抛弃外面的纯文本
+			if i > 0 {
+				p.buffer = p.buffer[i:]
+			}
+
+			// 尝试匹配开始标签
+			if m := startTagRe.FindStringSubmatch(p.buffer); m != nil {
+				name := m[1]
+				attrs := parseAttrs(m[2])
+
+				tag, ok := p.tags[name]
+				if ok {
+					p.activeTag = &tag
+					p.activeAttrs = attrs
+					if tag.cb.OnStart != nil {
+						tag.cb.OnStart(attrs)
+					}
+					// 丢掉开始标签
+					p.buffer = p.buffer[len(m[0]):]
+					continue
+				} else {
+					// 未注册的标签，跳过整个标签（包括开始标签、内容和结束标签）
+					// 先移除开始标签
+					p.buffer = p.buffer[len(m[0]):]
+					// 查找对应的结束标签
+					endPattern := "</" + name + ">"
+					endIdx := strings.Index(p.buffer, endPattern)
+					if endIdx != -1 {
+						// 找到结束标签，跳过整个标签内容
+						p.buffer = p.buffer[endIdx+len(endPattern):]
+						continue
+					}
+					// 如果还没找到结束标签，等待更多数据
+					return
+				}
+			}
+			return
 		}
 
-		switch t := tok.(type) {
-		case xml.StartElement:
-			name := t.Name.Local
-			cb, exists := p.tags[name]
-			if exists {
-				activeTag = name
-				attrs = make(map[string]string)
-				for _, a := range t.Attr {
-					attrs[a.Name.Local] = a.Value
-				}
-				if cb.OnStart != nil {
-					cb.OnStart(attrs)
-				}
-			} else {
-				activeTag = ""
+		// 活动标签模式（寻找正文或结束标签）
+		endIdx := strings.Index(p.buffer, "</")
+
+		if endIdx == -1 {
+			// 全是正文 → 流式输出
+			if p.activeTag.cb.OnMiddle != nil {
+				p.activeTag.cb.OnMiddle(p.buffer)
 			}
-		case xml.EndElement:
-			name := t.Name.Local
-			if cb, exists := p.tags[name]; exists && name == activeTag {
-				if cb.OnEnd != nil {
-					cb.OnEnd()
-				}
-				activeTag = ""
+			p.buffer = ""
+			return
+		}
+
+		// 中间正文
+		if endIdx > 0 {
+			text := p.buffer[:endIdx]
+			if p.activeTag.cb.OnMiddle != nil {
+				p.activeTag.cb.OnMiddle(text)
 			}
-		case xml.CharData:
-			if activeTag != "" {
-				if cb, exists := p.tags[activeTag]; exists && cb.OnMiddle != nil {
-					cb.OnMiddle(string(t))
+			p.buffer = p.buffer[endIdx:]
+		}
+
+		// 匹配结束标签
+		if m := endTagRe.FindStringSubmatch(p.buffer); m != nil {
+			endName := m[1]
+
+			if p.activeTag.name == endName {
+				if p.activeTag.cb.OnEnd != nil {
+					p.activeTag.cb.OnEnd()
 				}
+				p.activeTag = nil
+				p.activeAttrs = nil
+				p.buffer = p.buffer[len(m[0]):]
+				continue
 			}
 		}
+
+		return
 	}
 }

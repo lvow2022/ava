@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -104,6 +103,18 @@ type VolcEngineOption struct {
 	SpeedRatio float32 `json:"speedRatio"  default:"1.0"`
 }
 
+type WordTiming struct {
+	Word       string  `json:"word"`
+	StartTime  float64 `json:"startTime"`
+	EndTime    float64 `json:"endTime"`
+	Confidence float64 `json:"confidence"`
+}
+
+type SentenceTiming struct {
+	Text  string       `json:"text"`
+	Words []WordTiming `json:"words"`
+}
+
 type VolcEngine struct {
 	*BaseEngine
 	opt      VolcEngineOption
@@ -112,12 +123,15 @@ type VolcEngine struct {
 
 	SessionID string
 
-	stopped        atomic.Bool
 	closeOnce      sync.Once
 	cancel         context.CancelFunc
 	ctx            context.Context
 	recvLoopStopCh chan struct{}
 	recvFirstAudio bool
+
+	// 时间信息
+	timings      []SentenceTiming
+	timingsMutex sync.RWMutex
 }
 
 func NewVolcEngine(opt VolcEngineOption, s *Streamer) (*VolcEngine, error) {
@@ -200,6 +214,9 @@ Loop:
 					e.streamer.AppendAudio(msg.Payload)
 
 				}
+			case msg.MsgType == protocols.MsgTypeFullServerResponse && msg.EventType == protocols.EventType_TTSSentenceEnd:
+				// 解析句子结束事件，提取时间信息
+				e.handleSentenceEnd(msg.Payload)
 			case msg.EventType == protocols.EventType_SessionFinished:
 				e.streamer.EOS = true
 				break Loop
@@ -211,6 +228,12 @@ Loop:
 }
 
 func (e *VolcEngine) Synthesize(text string) error {
+	// 重置进度和时间信息，开始新的合成任务
+	e.streamer.ResetProgress()
+	e.timingsMutex.Lock()
+	e.timings = e.timings[:0] // 清空时间信息
+	e.timingsMutex.Unlock()
+	e.streamer.SetTimings(nil) // 清空 streamer 的时间信息
 
 	ttsReq := VolcRequest{
 		Event:     int32(protocols.EventType_TaskRequest),
@@ -238,9 +261,9 @@ func (e *VolcEngine) Close() error {
 	var closeErr error
 
 	e.closeOnce.Do(func() {
-		if err := e.finishSession(); err != nil {
-			closeErr = err
-		}
+		// if err := e.finishSession(); err != nil {
+		// 	closeErr = err
+		// }
 
 		// 关闭 websocket 连接
 		if err := e.closeConnection(); err != nil {
@@ -304,28 +327,107 @@ func (e *VolcEngine) startSession(conn *websocket.Conn) error {
 	}
 
 	//----------------wait session started----------------
-	_, err := protocols.WaitForEvent(conn, protocols.MsgTypeFullServerResponse, protocols.EventType_SessionStarted)
-	if err != nil {
-		return err
-	}
+	// _, err := protocols.WaitForEvent(conn, protocols.MsgTypeFullServerResponse, protocols.EventType_SessionStarted)
+	// if err != nil {
+	// 	return err
+	// }
 
 	return nil
 }
 
 // finish session to exit recvloop
 func (e *VolcEngine) finishSession() error {
-	if e.stopped.Swap(true) {
-		return nil
-	}
-
 	if err := protocols.FinishSession(e.conn, e.SessionID); err != nil {
 		return fmt.Errorf("finish session: %w", err)
 	}
+
 	// if _, err := protocols.WaitForEvent(e.conn, protocols.MsgTypeFullServerResponse, protocols.EventType_SessionFinished); err != nil {
 	// 	return fmt.Errorf("wait session finished: %w", err)
 	// }
 
 	return nil
+}
+
+func (e *VolcEngine) handleSentenceEnd(payload []byte) {
+	var timing SentenceTiming
+	if err := json.Unmarshal(payload, &timing); err != nil {
+		logrus.Warnf("volcengine: failed to parse sentence end timing: %v", err)
+		return
+	}
+
+	e.timingsMutex.Lock()
+	e.timings = append(e.timings, timing)
+	timingsCopy := make([]SentenceTiming, len(e.timings))
+	copy(timingsCopy, e.timings)
+	e.timingsMutex.Unlock()
+
+	// 更新 streamer 的时间信息
+	e.streamer.SetTimings(timingsCopy)
+
+	// 计算总时长并更新 streamer
+	if len(timing.Words) > 0 {
+		lastWord := timing.Words[len(timing.Words)-1]
+		totalDuration := lastWord.EndTime
+		e.streamer.SetTotalDuration(totalDuration)
+		logrus.Infof("volcengine: sentence end, total duration: %.2fs, words: %d", totalDuration, len(timing.Words))
+	}
+}
+
+// GetTimings 获取所有句子的时间信息
+func (e *VolcEngine) GetTimings() []SentenceTiming {
+	e.timingsMutex.RLock()
+	defer e.timingsMutex.RUnlock()
+	result := make([]SentenceTiming, len(e.timings))
+	copy(result, e.timings)
+	return result
+}
+
+// GetCurrentWord 根据当前播放时间获取正在播放的词
+// 如果当前时间不在任何词的时间范围内，返回最近播放的词或下一个要播放的词
+func (e *VolcEngine) GetCurrentWord(currentTime float64) *WordTiming {
+	e.timingsMutex.RLock()
+	defer e.timingsMutex.RUnlock()
+
+	var lastWord *WordTiming
+	var nextWord *WordTiming
+	var foundNext bool
+
+	for _, sentence := range e.timings {
+		for _, word := range sentence.Words {
+			// 如果当前时间在词的时间范围内，直接返回
+			if currentTime >= word.StartTime && currentTime <= word.EndTime {
+				return &word
+			}
+
+			// 记录最近播放的词（结束时间 <= 当前时间）
+			if word.EndTime <= currentTime {
+				lastWord = &word
+			}
+
+			// 记录下一个要播放的词（开始时间 > 当前时间，且还没找到下一个）
+			if !foundNext && word.StartTime > currentTime {
+				nextWord = &word
+				foundNext = true
+			}
+		}
+	}
+
+	// 如果当前时间在词与词之间的间隔中，优先返回最近播放的词
+	// 如果最近播放的词距离当前时间较远（>0.5秒），则返回下一个要播放的词
+	if lastWord != nil {
+		timeSinceLastWord := currentTime - lastWord.EndTime
+		if timeSinceLastWord <= 0.5 {
+			return lastWord
+		}
+	}
+
+	// 返回下一个要播放的词
+	if nextWord != nil {
+		return nextWord
+	}
+
+	// 如果都没有，返回最近播放的词
+	return lastWord
 }
 
 func convertSpeechRate(speedRatio float32) int32 {
