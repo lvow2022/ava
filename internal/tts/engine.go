@@ -6,8 +6,9 @@ import (
 
 type Engine interface {
 	Initialize(ctx context.Context) error
+	StartSession() (*Streamer, error)
 	Synthesize(text string) error
-	Stop() error
+	FinishSession() error
 	Close() error
 }
 

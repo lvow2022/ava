@@ -6,13 +6,9 @@ import (
 	"fmt"
 	"log"
 	"time"
-
-	"github.com/gopxl/beep"
 )
 
 func main() {
-
-	ttsStreamer := tts.NewStreamer(beep.SampleRate(16000), 1)
 
 	ttsOpt := tts.VolcEngineOption{
 		VoiceType:  "zh_male_lengkugege_emo_v2_mars_bigtts",
@@ -26,7 +22,7 @@ func main() {
 		SpeedRatio: 1.1,
 	}
 
-	ttsEngine, err := tts.NewVolcEngine(ttsOpt, ttsStreamer)
+	ttsEngine, err := tts.NewVolcEngine(ttsOpt)
 	if err != nil {
 		log.Fatalf("Failed to create tts engine: %v", err)
 	}
@@ -39,7 +35,6 @@ func main() {
 
 	// 创建 Speaker
 	speaker := tts.NewSpeaker(ttsEngine)
-	speaker.Play(ttsStreamer)
 
 	// 创建 context 用于控制进度打印 goroutine
 	progressCtx, cancelProgress := context.WithCancel(ctx)
@@ -80,11 +75,19 @@ func main() {
 	}()
 
 	// 合成并播放语音
-	if err := speaker.Say("欢迎来到美丽新世界!", false); err != nil {
+	// 第一个调用：start=true 表示开始新 session，end=false 表示不结束 session
+	if err := speaker.Say("欢迎来到美丽新世界!", true, false); err != nil {
 		log.Fatalf("Failed to synthesize: %v", err)
 	}
 
-	if err := speaker.Say("让我们一起跳舞吧!", true); err != nil {
+	// 第二个调用：start=false 表示继续使用当前 session，end=true 表示结束 session
+	// 注意：这会等待 session 真正完成后才返回
+	if err := speaker.Say("让我们一起跳舞吧!", false, true); err != nil {
+		log.Fatalf("Failed to synthesize: %v", err)
+	}
+
+	// 第三个调用：start=true 表示开始新 session（因为上一个已经结束），end=true 表示结束 session
+	if err := speaker.Say("大傻春，你要干嘛!", true, true); err != nil {
 		log.Fatalf("Failed to synthesize: %v", err)
 	}
 

@@ -76,15 +76,21 @@ func main() {
 
 重要工作流程：
 1. 当用户输入时，你应该首先调用 get_playback_progress 工具来查询当前播放进度
-2. 根据工具返回的进度信息（is_playing, remaining_time, played_text 等）自主判断。
+2. 根据工具返回的进度信息（is_playing, remaining_time, played_text 等），结合用户输入自主判断，是否需要停止当前播放。
+
 
 可用的 XML 标签：
 - <say>文本内容</say>: 将标签内的文本内容转换为语音播放。所有需要播放给用户的文本都必须放在此标签内。
-- <stop></stop>: 立即停止当前正在播放的语音。
+- <stop></stop>: 立即停止当前正在播放的语音。仅在 is_playing 为 true 时使用，当用户明确要求停止、打断播放，或者输入了有意义的指令需要停止当前播放时使用。
+- <pause></pause>: 暂停当前正在播放的语音。仅在 is_playing 为 true 时使用。不能与其他标签同时使用。
+- <resume></resume>: 恢复当前暂停的语音播放。不能与其他标签同时使用。
+- <donotplay></donotplay>: 忽略用户输入，继续播放当前语音。仅在 is_playing 为 true 时使用，当用户输入无关字符、无意义内容、随意输入（如"叽里呱啦"、"啊啊啊"、"123"等）时使用此标签。
+- 标签有 reason 属性，可以将理由写入到 reason。
+- 标签不能嵌套。
 
 可用的工具：
 - get_playback_progress: 查询当前播放进度信息，包括：
-  * is_playing: 是否正在播放
+  * is_playing: 是否正在播放（true 表示正在播放，false 表示没有播放）
   * current_time: 当前播放时间（秒）
   * total_time: 总时长（秒）
   * remaining_time: 剩余时间（秒）
@@ -94,16 +100,15 @@ func main() {
 
 使用规则：
 1. 收到用户输入时，建议先调用 get_playback_progress 工具了解当前播放状态
-2. 根据进度信息自主判断是否需要停止当前播放
+2. 根据 is_playing 状态和用户输入内容进行判断：
+   - 如果 is_playing 为 false（当前没有播放）：
+     * 直接使用 <say> 标签回复用户，不需要调用 <stop>、<pause>、<resume> 或 <donotplay> 标签
+   - 如果 is_playing 为 true（当前正在播放）：
+     * 如果用户输入是无关字符、无意义内容、随意输入（如乱码、无意义的字符组合、测试输入等），使用 <donotplay></donotplay> 标签，继续播放当前语音
+     * 如果用户输入是有意义的指令或明确要求停止/打断，使用 <stop></stop> 标签停止当前播放，然后使用 <say> 标签回复
 3. 所有需要播放给用户的文本都必须放在 <say> 标签内
 4. 不要在 <say> 标签外放置任何需要播放的文本
-5. 如果用户输入很重要或紧急，即使播放刚开始也应该立即停止并响应
-
-示例流程：
-用户输入："你好"
-1. 调用 get_playback_progress() 查询进度
-2. 如果返回 is_playing: true, remaining_time: 3.5，则：<stop></stop><say>你好！有什么可以帮助你的吗？</say>
-3. 如果返回 is_playing: false，则直接：<say>你好！有什么可以帮助你的吗？</say>`
+`
 
 	messages := []*schema.Message{
 		{

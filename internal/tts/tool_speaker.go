@@ -4,19 +4,16 @@ import (
 	"context"
 	"errors"
 	"sync"
-
-	"github.com/gopxl/beep"
 )
 
 // ToolSpeakerManager 管理全局的 Speaker 实例，支持懒加载和线程安全访问
 type ToolSpeakerManager struct {
-	mu       sync.RWMutex
-	once     sync.Once
-	speaker  *Speaker
-	engine   Engine
-	streamer *Streamer
-	config   *ToolSpeakerConfig
-	initErr  error
+	mu      sync.RWMutex
+	once    sync.Once
+	speaker *Speaker
+	engine  Engine
+	config  *ToolSpeakerConfig
+	initErr error
 }
 
 // ToolSpeakerConfig 配置 Speaker 管理器
@@ -78,10 +75,6 @@ func (m *ToolSpeakerManager) GetSpeaker(ctx context.Context) (*Speaker, error) {
 			return
 		}
 
-		// 创建 Streamer
-		streamer := NewStreamer(beep.SampleRate(m.config.SampleRate), m.config.Channels)
-		m.streamer = streamer
-
 		// 创建 Engine
 		engineOpt := VolcEngineOption{
 			VoiceType:  m.config.VoiceType,
@@ -95,7 +88,7 @@ func (m *ToolSpeakerManager) GetSpeaker(ctx context.Context) (*Speaker, error) {
 			SpeedRatio: m.config.SpeedRatio,
 		}
 
-		engine, err := NewVolcEngine(engineOpt, streamer)
+		engine, err := NewVolcEngine(engineOpt)
 		if err != nil {
 			m.initErr = err
 			return
@@ -110,8 +103,8 @@ func (m *ToolSpeakerManager) GetSpeaker(ctx context.Context) (*Speaker, error) {
 		m.engine = engine
 
 		// 创建 Speaker
+		// 注意：不需要在这里启动 session，Say() 方法会自动调用 StartSession()
 		speaker := NewSpeaker(engine)
-		speaker.Play(streamer)
 		m.speaker = speaker
 	})
 

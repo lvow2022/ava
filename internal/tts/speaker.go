@@ -1,9 +1,12 @@
 package tts
 
 import (
+	"fmt"
 	"time"
 
+	"github.com/gopxl/beep"
 	"github.com/gopxl/beep/speaker"
+	"github.com/sirupsen/logrus"
 )
 
 // Progress 表示播放进度信息
@@ -16,61 +19,101 @@ type Progress struct {
 }
 
 type Speaker struct {
-	tts      Engine
-	streamer *Streamer
+	tts         Engine
+	streamQueue *StreamQueue
 }
 
 func NewSpeaker(tts Engine) *Speaker {
-	return &Speaker{
-		tts: tts,
+	s := &Speaker{
+		tts:         tts,
+		streamQueue: NewStreamQueue(),
 	}
+
+	// 初始化 speaker
+	// 从 Engine 获取 format 信息（目前支持 VolcEngine）
+	var sampleRate beep.SampleRate
+
+	if volcEngine, ok := tts.(*VolcEngine); ok {
+		sampleRate = beep.SampleRate(volcEngine.opt.SampleRate)
+	} else {
+		// 默认值，如果 Engine 未初始化或不是 VolcEngine
+		sampleRate = beep.SampleRate(16000)
+	}
+
+	// 初始化 beep speaker
+	speaker.Init(sampleRate, sampleRate.N(time.Second/10))
+	speaker.Play(s.streamQueue)
+
+	return s
 }
 
-func (s *Speaker) Say(text string, end bool) error {
-	err := s.tts.Synthesize(text)
-	if err != nil {
-		return err
+func (s *Speaker) Say(text string, start, end bool) error {
+	var streamer *Streamer
+	var err error
+
+	// 1. 启动新 session，获取新的 streamer
+	//    StartSession() 内部会结束旧 session（如果有）
+	if start {
+		streamer, err = s.tts.StartSession()
+		if err != nil {
+			return fmt.Errorf("start session failed: %w", err)
+		}
+		s.streamQueue.Push(streamer)
 	}
 
-	//if end {
-	//return s.tts.Stop()
-	//}
+	// 2. 合成文本（使用当前 session）
+	err = s.tts.Synthesize(text)
+	if err != nil {
+		return fmt.Errorf("synthesize failed: %w", err)
+	}
+
+	// 3. 如果 end 为 true，结束 session
+	if end {
+		if err := s.tts.FinishSession(); err != nil {
+			logrus.Warnf("speaker: failed to finish session: %v", err)
+		}
+	}
 
 	return nil
 }
 
 func (s *Speaker) Play(streamer *Streamer) {
-	s.streamer = streamer
-	speaker.Init(streamer.format.SampleRate, streamer.format.SampleRate.N(time.Second/10))
-	speaker.Play(streamer)
+	s.streamQueue.Push(streamer)
 }
 
 func (s *Speaker) Pause() {
 	speaker.Lock()
-	s.streamer.Paused = true
+	speaker.Suspend()
 	speaker.Unlock()
 }
 
 func (s *Speaker) Resume() {
 	speaker.Lock()
-	s.streamer.Paused = false
+	speaker.Resume()
 	speaker.Unlock()
 }
 
+// 停止播放当前streamer
 func (s *Speaker) Stop() {
 	speaker.Lock()
-	s.streamer.ClearBuffer() // 清空缓冲区，但流可以继续使用
-	// s.tts.Stop()
+	s.streamQueue.StopCurrent()
 	speaker.Unlock()
+
+	// 结束当前的 TTS session，确保下次 Say() 时能正常开始新 session
+	if err := s.tts.FinishSession(); err != nil {
+		logrus.Warnf("speaker: failed to finish session after stop: %v", err)
+	}
 }
 
 // GetProgress 获取当前播放进度
 func (s *Speaker) GetProgress() *Progress {
-	if s.streamer == nil {
+	// 从 StreamQueue 获取当前正在播放的 streamer
+	currentStreamer := s.streamQueue.GetCurrentStreamer()
+	if currentStreamer == nil {
 		return &Progress{}
 	}
 
-	currentTime, totalTime := s.streamer.GetProgress()
+	currentTime, totalTime := currentStreamer.GetProgress()
 	progress := &Progress{
 		CurrentTime: currentTime,
 		TotalTime:   totalTime,
@@ -90,8 +133,8 @@ func (s *Speaker) GetProgress() *Progress {
 	}
 
 	// 从 streamer 获取已播放文本
-	if s.streamer != nil {
-		progress.PlayedText = s.streamer.GetPlayedText(currentTime)
+	if currentStreamer != nil {
+		progress.PlayedText = currentStreamer.GetPlayedText(currentTime)
 	}
 
 	return progress

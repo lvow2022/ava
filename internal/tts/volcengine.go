@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/gopxl/beep"
 	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
@@ -117,123 +117,191 @@ type SentenceTiming struct {
 
 type VolcEngine struct {
 	*BaseEngine
-	opt      VolcEngineOption
-	conn     *websocket.Conn
-	streamer *Streamer
+	opt  VolcEngineOption
+	conn *websocket.Conn
+
+	streamerMu sync.RWMutex
+	streamer   *Streamer // 单 session streamer
 
 	SessionID string
 
-	closeOnce      sync.Once
-	cancel         context.CancelFunc
-	ctx            context.Context
-	recvLoopStopCh chan struct{}
-	recvFirstAudio bool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	closeOnce sync.Once
 
-	// 时间信息
-	timings      []SentenceTiming
-	timingsMutex sync.RWMutex
+	sessionFinishedCh chan struct{}
+	sessionStartedCh  chan struct{}
+	timingsMutex      sync.RWMutex
+	timings           []SentenceTiming
+
+	recvFirstAudio bool
 }
 
-func NewVolcEngine(opt VolcEngineOption, s *Streamer) (*VolcEngine, error) {
-	if s == nil {
-		return nil, errors.New("streamer is nil")
-	}
+// ------------------------ Constructor ------------------------
+
+func NewVolcEngine(opt VolcEngineOption) (*VolcEngine, error) {
 	return &VolcEngine{
-		BaseEngine:     NewBaseEngine(nil),
-		opt:            opt,
-		streamer:       s,
-		recvLoopStopCh: make(chan struct{}),
+		BaseEngine:        NewBaseEngine(nil),
+		opt:               opt,
+		sessionFinishedCh: make(chan struct{}, 1),
+		sessionStartedCh:  make(chan struct{}, 1),
 	}, nil
 }
 
+// ------------------------ Initialization ------------------------
+
 func (e *VolcEngine) Initialize(ctx context.Context) error {
 	e.ctx, e.cancel = context.WithCancel(ctx)
-	e.SessionID = uuid.New().String()
-	// ---------------- Dial 超时 ----------------
-	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	// websocket 鉴权
-	header := http.Header{}
-	header.Set("X-Api-App-Key", e.opt.AppKey)
-	header.Set("X-Api-Access-Key", e.opt.AccessKey)
-	header.Set("X-Api-Resource-Id", e.opt.ResourceID)
-	header.Set("X-Api-Connect-Id", e.SessionID)
-	header.Set("X-Control-Require-Usage-Tokens-Return", "*")
-	endpoint := "wss://openspeech.bytedance.com/api/v3/tts/bidirection"
-	// ----------------dial server----------------
-	conn, r, err := websocket.DefaultDialer.DialContext(dialCtx, endpoint, header)
+
+	ws, r, err := e.dialWebsocket(ctx)
 	if err != nil {
-		if conn != nil {
-			_ = conn.Close()
+		if ws != nil {
+			_ = ws.Close()
 		}
 		return fmt.Errorf("dial: %w, resp: %v", err, r)
 	}
-	e.conn = conn
 
-	if err := e.startConnection(e.conn); err != nil {
+	e.conn = ws
+
+	if err := e.startConnection(ws); err != nil {
 		return err
 	}
 
-	if err := e.startSession(e.conn); err != nil {
-		return err
-	}
 	go e.recvLoop()
 	return nil
 }
 
+func (e *VolcEngine) dialWebsocket(ctx context.Context) (*websocket.Conn, *http.Response, error) {
+	header := http.Header{}
+	header.Set("X-Api-App-Key", e.opt.AppKey)
+	header.Set("X-Api-Access-Key", e.opt.AccessKey)
+	header.Set("X-Api-Resource-Id", e.opt.ResourceID)
+	header.Set("X-Api-Connect-Id", uuid.New().String())
+	header.Set("X-Control-Require-Usage-Tokens-Return", "*")
+
+	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	endpoint := "wss://openspeech.bytedance.com/api/v3/tts/bidirection"
+	return websocket.DefaultDialer.DialContext(dialCtx, endpoint, header)
+}
+
+// ------------------------ recvLoop ------------------------
+
 func (e *VolcEngine) recvLoop() {
-	defer func() {
-		if r := recover(); r != nil {
-			logrus.Errorf("Recovered from panic in recvLoop: %v", r)
-		}
-		close(e.recvLoopStopCh)
-	}()
-Loop:
+
 	for {
 		select {
 		case <-e.ctx.Done():
 			return
 		default:
 			msg, err := protocols.ReceiveMessage(e.conn)
-			logrus.Info("volcengine: recv message: ", msg.String())
 			if err != nil {
-				if websocket.IsCloseError(err, websocket.CloseNormalClosure) || strings.Contains(err.Error(), "use of closed network connection") {
-					logrus.Info("volcengine: recv message error: ", err)
+				if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+					logrus.Info("volcengine: normal ws close")
 				} else {
-					logrus.Error("volcengine: recv message error: ", err)
+					logrus.Warnf("volcengine: recv error=%v", err)
 				}
-
-				break Loop
+				return
 			}
-			switch {
-			case msg.MsgType == protocols.MsgTypeAudioOnlyServer:
-				if len(msg.Payload) > 0 {
-					if !e.recvFirstAudio {
-						e.recvFirstAudio = true
-					}
-					e.streamer.AppendAudio(msg.Payload)
-
-				}
-			case msg.MsgType == protocols.MsgTypeFullServerResponse && msg.EventType == protocols.EventType_TTSSentenceEnd:
-				// 解析句子结束事件，提取时间信息
-				e.handleSentenceEnd(msg.Payload)
-			case msg.EventType == protocols.EventType_SessionFinished:
-				e.streamer.EOS = true
-				break Loop
-			default:
-				//todo log error message
-			}
+			logrus.Info("volc: recv message: ", msg.String())
+			e.handleMessage(msg)
 		}
 	}
 }
 
+func (e *VolcEngine) handleMessage(msg *protocols.Message) {
+	switch {
+	case msg.MsgType == protocols.MsgTypeAudioOnlyServer:
+		e.handleAudio(msg.Payload)
+
+	case msg.MsgType == protocols.MsgTypeFullServerResponse &&
+		msg.EventType == protocols.EventType_TTSSentenceEnd:
+		e.handleSentenceEnd(msg.Payload)
+
+	// case msg.MsgType == protocols.MsgTypeError:
+
+	case msg.EventType == protocols.EventType_SessionFinished:
+		// 设置当前 streamer 的 EOS 标志，表示数据已全部接收完成
+		e.streamerMu.RLock()
+		streamer := e.streamer
+		e.streamerMu.RUnlock()
+		if streamer != nil {
+			// 使用 Streamer 自己的锁来修改 EOS，因为 Stream() 方法在读取 EOS 时也使用了这个锁
+			streamer.mu.Lock()
+			streamer.EOS = true
+			streamer.mu.Unlock()
+		}
+		// 发送完成通知
+		e.sessionFinishedCh <- struct{}{}
+
+	case msg.EventType == protocols.EventType_SessionStarted:
+		e.sessionStartedCh <- struct{}{}
+	}
+}
+
+func (e *VolcEngine) handleAudio(audio []byte) {
+	if len(audio) == 0 {
+		return
+	}
+	if !e.recvFirstAudio {
+		e.recvFirstAudio = true
+	}
+
+	e.streamerMu.RLock()
+	s := e.streamer
+	e.streamerMu.RUnlock()
+
+	if s != nil {
+		s.AppendAudio(audio)
+	}
+}
+
+// ------------------------ Session Logic ------------------------
+
+func (e *VolcEngine) StartSession() (*Streamer, error) {
+	if e.conn == nil {
+		return nil, errors.New("connection not initialized")
+	}
+
+	streamer := NewStreamer(beep.SampleRate(e.opt.SampleRate), e.opt.Channels)
+
+	e.SessionID = uuid.New().String()
+	e.recvFirstAudio = false
+	e.resetTimings()
+
+	if err := e.startSession(e.conn); err != nil {
+		return nil, err
+	}
+
+	e.setStreamer(streamer)
+	return streamer, nil
+}
+
+func (e *VolcEngine) FinishSession() error {
+	if err := e.finishSession(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (e *VolcEngine) Synthesize(text string) error {
+	// 获取当前 streamer（线程安全）
+	e.streamerMu.RLock()
+	streamer := e.streamer
+	e.streamerMu.RUnlock()
+
+	if streamer == nil {
+		return errors.New("streamer is nil")
+	}
+
 	// 重置进度和时间信息，开始新的合成任务
-	e.streamer.ResetProgress()
+	streamer.ResetProgress()
 	e.timingsMutex.Lock()
 	e.timings = e.timings[:0] // 清空时间信息
 	e.timingsMutex.Unlock()
-	e.streamer.SetTimings(nil) // 清空 streamer 的时间信息
+	streamer.SetTimings(nil) // 清空 streamer 的时间信息
 
 	ttsReq := VolcRequest{
 		Event:     int32(protocols.EventType_TaskRequest),
@@ -249,22 +317,33 @@ func (e *VolcEngine) Synthesize(text string) error {
 	if err := protocols.TaskRequest(e.conn, payload, e.SessionID); err != nil {
 		return err
 	}
-	logrus.Info("volcengine: send task request: ", string(payload))
+	logrus.Info("volc: send task request: ", string(payload))
 	return nil
 }
 
-func (e *VolcEngine) Stop() error {
-	return e.finishSession()
+// ------------------------ Streamer helpers ------------------------
+
+func (e *VolcEngine) setStreamer(s *Streamer) {
+	e.streamerMu.Lock()
+	e.streamer = s
+	e.streamerMu.Unlock()
 }
 
+func (e *VolcEngine) resetTimings() {
+	e.timingsMutex.Lock()
+	e.timings = e.timings[:0]
+	e.timingsMutex.Unlock()
+}
 func (e *VolcEngine) Close() error {
 	var closeErr error
 
 	e.closeOnce.Do(func() {
-		// if err := e.finishSession(); err != nil {
-		// 	closeErr = err
-		// }
-
+		e.streamerMu.RLock()
+		streamer := e.streamer
+		e.streamerMu.RUnlock()
+		if streamer != nil {
+			streamer.Close()
+		}
 		// 关闭 websocket 连接
 		if err := e.closeConnection(); err != nil {
 			closeErr = errors.Join(closeErr, err)
@@ -284,7 +363,7 @@ func (e *VolcEngine) startConnection(conn *websocket.Conn) error {
 
 	msg, err := protocols.WaitForEvent(e.conn, protocols.MsgTypeFullServerResponse, protocols.EventType_ConnectionStarted)
 	if err != nil {
-		return fmt.Errorf("wait connection started: %w, %v", err, msg)
+		return fmt.Errorf("volc: wait connection started: %w, %v", err, msg)
 	}
 
 	return nil
@@ -301,7 +380,7 @@ func (e *VolcEngine) closeConnection() error {
 	return nil
 }
 
-// 一次语音合成：start session -> wait session started -> send task request -> Finish session
+// startSession 内部方法，用于启动 session
 func (e *VolcEngine) startSession(conn *websocket.Conn) error {
 	startReq := VolcRequest{
 		//User: &TTSUser{
@@ -327,31 +406,45 @@ func (e *VolcEngine) startSession(conn *websocket.Conn) error {
 	}
 
 	//----------------wait session started----------------
-	// _, err := protocols.WaitForEvent(conn, protocols.MsgTypeFullServerResponse, protocols.EventType_SessionStarted)
-	// if err != nil {
-	// 	return err
-	// }
-
+	// 清空之前的通知（如果有）
+	select {
+	case <-e.sessionStartedCh:
+	default:
+	}
+	// 等待新的 session started 通知
+	select {
+	case <-e.sessionStartedCh:
+	case <-time.After(5 * time.Second):
+		return errors.New("volc: session started timeout")
+	}
 	return nil
 }
 
-// finish session to exit recvloop
+// finishSession 内部方法，用于结束 session
 func (e *VolcEngine) finishSession() error {
-	if err := protocols.FinishSession(e.conn, e.SessionID); err != nil {
-		return fmt.Errorf("finish session: %w", err)
+	// 清空之前的完成通知（如果有），确保等待的是新的完成通知
+	select {
+	case <-e.sessionFinishedCh:
+	default:
 	}
 
-	// if _, err := protocols.WaitForEvent(e.conn, protocols.MsgTypeFullServerResponse, protocols.EventType_SessionFinished); err != nil {
-	// 	return fmt.Errorf("wait session finished: %w", err)
-	// }
+	if err := protocols.FinishSession(e.conn, e.SessionID); err != nil {
+		return fmt.Errorf("volc: finish session: %w", err)
+	}
 
+	// 等待新的 session finished 通知
+	select {
+	case <-e.sessionFinishedCh:
+	case <-time.After(5 * time.Second):
+		return errors.New("volc: session finished timeout")
+	}
 	return nil
 }
 
 func (e *VolcEngine) handleSentenceEnd(payload []byte) {
 	var timing SentenceTiming
 	if err := json.Unmarshal(payload, &timing); err != nil {
-		logrus.Warnf("volcengine: failed to parse sentence end timing: %v", err)
+		logrus.Warnf("volc: failed to parse sentence end timing: %v", err)
 		return
 	}
 
@@ -361,15 +454,22 @@ func (e *VolcEngine) handleSentenceEnd(payload []byte) {
 	copy(timingsCopy, e.timings)
 	e.timingsMutex.Unlock()
 
-	// 更新 streamer 的时间信息
-	e.streamer.SetTimings(timingsCopy)
+	// 获取当前 streamer（线程安全）
+	e.streamerMu.RLock()
+	streamer := e.streamer
+	e.streamerMu.RUnlock()
 
-	// 计算总时长并更新 streamer
-	if len(timing.Words) > 0 {
-		lastWord := timing.Words[len(timing.Words)-1]
-		totalDuration := lastWord.EndTime
-		e.streamer.SetTotalDuration(totalDuration)
-		logrus.Infof("volcengine: sentence end, total duration: %.2fs, words: %d", totalDuration, len(timing.Words))
+	if streamer != nil {
+		// 更新 streamer 的时间信息
+		streamer.SetTimings(timingsCopy)
+
+		// 计算总时长并更新 streamer
+		if len(timing.Words) > 0 {
+			lastWord := timing.Words[len(timing.Words)-1]
+			totalDuration := lastWord.EndTime
+			streamer.SetTotalDuration(totalDuration)
+			logrus.Infof("volc: sentence end, total duration: %.2fs, words: %d", totalDuration, len(timing.Words))
+		}
 	}
 }
 

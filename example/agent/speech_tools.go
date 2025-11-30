@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -12,12 +13,15 @@ import (
 
 // SayTextTool 合成并播放文本的工具
 type SayTextTool struct {
-	manager *tts.ToolSpeakerManager
+	manager     *tts.ToolSpeakerManager
+	firstCall   bool
+	firstCallMu sync.Mutex
 }
 
 func NewSayTextTool(manager *tts.ToolSpeakerManager) *SayTextTool {
 	return &SayTextTool{
-		manager: manager,
+		manager:   manager,
+		firstCall: true,
 	}
 }
 
@@ -59,7 +63,22 @@ func (st *SayTextTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		return "", fmt.Errorf("failed to get speaker: %w", err)
 	}
 
-	if err := speaker.Say(args.Text, args.End); err != nil {
+	// 确定 start 参数：第一次调用为 true，后续为 false
+	st.firstCallMu.Lock()
+	start := st.firstCall
+	if st.firstCall {
+		st.firstCall = false
+	}
+	st.firstCallMu.Unlock()
+
+	// 如果 end=true，下次调用应该重新开始
+	if args.End {
+		st.firstCallMu.Lock()
+		st.firstCall = true
+		st.firstCallMu.Unlock()
+	}
+
+	if err := speaker.Say(args.Text, start, args.End); err != nil {
 		return "", fmt.Errorf("failed to synthesize text: %w", err)
 	}
 
