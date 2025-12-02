@@ -51,25 +51,21 @@ func (s *Speaker) Say(text string, start, end bool) error {
 	var streamer *Streamer
 	var err error
 
-	// 1. 启动新 session，获取新的 streamer
-	//    StartSession() 内部会结束旧 session（如果有）
 	if start {
-		streamer, err = s.tts.StartSession()
+		streamer, err = s.tts.Start()
 		if err != nil {
 			return fmt.Errorf("start session failed: %w", err)
 		}
 		s.streamQueue.Push(streamer)
 	}
 
-	// 2. 合成文本（使用当前 session）
 	err = s.tts.Synthesize(text)
 	if err != nil {
 		return fmt.Errorf("synthesize failed: %w", err)
 	}
 
-	// 3. 如果 end 为 true，结束 session
 	if end {
-		if err := s.tts.FinishSession(); err != nil {
+		if err := s.tts.End(); err != nil {
 			logrus.Warnf("speaker: failed to finish session: %v", err)
 		}
 	}
@@ -100,7 +96,7 @@ func (s *Speaker) Stop() {
 	speaker.Unlock()
 
 	// 结束当前的 TTS session，确保下次 Say() 时能正常开始新 session
-	if err := s.tts.FinishSession(); err != nil {
+	if err := s.tts.End(); err != nil {
 		logrus.Warnf("speaker: failed to finish session after stop: %v", err)
 	}
 }

@@ -103,7 +103,7 @@ func (m *ToolSpeakerManager) GetSpeaker(ctx context.Context) (*Speaker, error) {
 		m.engine = engine
 
 		// 创建 Speaker
-		// 注意：不需要在这里启动 session，Say() 方法会自动调用 StartSession()
+		// 注意：不需要在这里启动 session，Say() 方法会自动调用 Start()
 		speaker := NewSpeaker(engine)
 		m.speaker = speaker
 	})
@@ -139,4 +139,3 @@ func (m *ToolSpeakerManager) Close() error {
 
 	return nil
 }
-

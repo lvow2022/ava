@@ -253,7 +253,7 @@ func (e *VolcEngine) handleAudio(audio []byte) {
 
 // ------------------------ Session Logic ------------------------
 
-func (e *VolcEngine) StartSession() (*Streamer, error) {
+func (e *VolcEngine) Start() (*Streamer, error) {
 	if e.conn == nil {
 		return nil, errors.New("connection not initialized")
 	}
@@ -273,7 +273,7 @@ func (e *VolcEngine) StartSession() (*Streamer, error) {
 	return streamer, nil
 }
 
-func (e *VolcEngine) FinishSession() error {
+func (e *VolcEngine) End() error {
 	if !e.sessionFinished.CompareAndSwap(false, true) {
 		return nil
 	}
