@@ -9,7 +9,10 @@ import (
 	"github.com/gopxl/beep"
 )
 
-var ErrStreamStopped = errors.New("stream stopped")
+var (
+	ErrStreamStopped = errors.New("stream stopped")
+	ErrEndOfStream   = errors.New("end of stream")
+)
 
 type Streamer struct {
 	mu sync.Mutex
@@ -17,10 +20,7 @@ type Streamer struct {
 	format beep.Format
 	buf    []byte
 
-	EOS    bool
-	Paused bool
-	err    error // 用于立即停止流
-
+	err error
 	// 播放进度跟踪
 	bytesPlayed   int64     // 已播放的字节数
 	startTime     time.Time // 开始播放的时间
@@ -54,20 +54,17 @@ func (s *Streamer) Stream(samples [][2]float64) (int, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 如果设置了错误，立即停止流（即使 buf 中还有数据）
-	if s.err != nil {
+	// 如果被停止，立即返回
+	if s.err == ErrStreamStopped {
 		return 0, false
-	}
-
-	if s.Paused {
-		return 0, true // 暂停 → 告诉 speaker "暂时没数据"
 	}
 
 	bytesPerSample := int(s.format.NumChannels) * int(s.format.Precision)
 	required := len(samples) * bytesPerSample
 
 	if len(s.buf) == 0 {
-		if s.EOS {
+		// 如果 buffer 为空且已经到达流结束，返回 false
+		if s.err == ErrEndOfStream {
 			return 0, false
 		}
 		return 0, true // 没数据但还没结束 → 等待动态 append
@@ -122,12 +119,13 @@ func (s *Streamer) Err() error {
 	return s.err
 }
 
-// ClearBuffer 清空缓冲区，但流可以继续使用
-func (s *Streamer) ClearBuffer() {
+// SetError 设置流的错误状态，只有在当前没有错误时才设置（避免覆盖已有错误）
+func (s *Streamer) SetError(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.buf = s.buf[:0] // 清空缓冲区，但保留容量
-	s.EOS = false     // 重置结束标志
+	if s.err == nil {
+		s.err = err
+	}
 }
 
 // Close 立即停止流，即使缓冲区中还有数据（流将不再可用）

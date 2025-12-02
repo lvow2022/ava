@@ -35,13 +35,13 @@ func NewTagAwareSpeaker(s *Speaker) *TagAwareSpeaker {
 	})
 
 	// pause 标签
-	tas.parser.RegisterTag("pause", TagCallbacks{
-		OnStart: func(attrs map[string]string) {
-			reason := attrs["reason"]
-			fmt.Println("[pause] 暂停播放, 原因:", reason)
-			s.Pause()
-		},
-	})
+	// tas.parser.RegisterTag("pause", TagCallbacks{
+	// 	OnStart: func(attrs map[string]string) {
+	// 		reason := attrs["reason"]
+	// 		fmt.Println("[pause] 暂停播放, 原因:", reason)
+	// 		s.Pause()
+	// 	},
+	// })
 
 	// stop 标签
 	tas.parser.RegisterTag("stop", TagCallbacks{
@@ -53,13 +53,13 @@ func NewTagAwareSpeaker(s *Speaker) *TagAwareSpeaker {
 	})
 
 	// resume 标签
-	tas.parser.RegisterTag("resume", TagCallbacks{
-		OnStart: func(attrs map[string]string) {
-			reason := attrs["reason"]
-			fmt.Println("[resume] 恢复播放, 原因:", reason)
-			s.Resume()
-		},
-	})
+	// tas.parser.RegisterTag("resume", TagCallbacks{
+	// 	OnStart: func(attrs map[string]string) {
+	// 		reason := attrs["reason"]
+	// 		fmt.Println("[resume] 恢复播放, 原因:", reason)
+	// 		s.Resume()
+	// 	},
+	// })
 
 	return tas
 }

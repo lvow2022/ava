@@ -9,7 +9,6 @@ import (
 )
 
 func main() {
-
 	ttsOpt := tts.VolcEngineOption{
 		VoiceType:  "zh_male_lengkugege_emo_v2_mars_bigtts",
 		ResourceID: "seed-tts-1.0",

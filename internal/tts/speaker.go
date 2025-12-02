@@ -81,17 +81,17 @@ func (s *Speaker) Play(streamer *Streamer) {
 	s.streamQueue.Push(streamer)
 }
 
-func (s *Speaker) Pause() {
-	speaker.Lock()
-	speaker.Suspend()
-	speaker.Unlock()
-}
+// func (s *Speaker) Pause() {
+// 	speaker.Lock()
+// 	speaker.Suspend()
+// 	speaker.Unlock()
+// }
 
-func (s *Speaker) Resume() {
-	speaker.Lock()
-	speaker.Resume()
-	speaker.Unlock()
-}
+// func (s *Speaker) Resume() {
+// 	speaker.Lock()
+// 	speaker.Resume()
+// 	speaker.Unlock()
+// }
 
 // 停止播放当前streamer
 func (s *Speaker) Stop() {

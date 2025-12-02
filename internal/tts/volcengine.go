@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -131,10 +132,11 @@ type VolcEngine struct {
 
 	sessionFinishedCh chan struct{}
 	sessionStartedCh  chan struct{}
-	timingsMutex      sync.RWMutex
+	mu                sync.RWMutex
 	timings           []SentenceTiming
 
-	recvFirstAudio bool
+	recvFirstAudio  bool
+	sessionFinished atomic.Bool // 防止重复调用 finishSession
 }
 
 // ------------------------ Constructor ------------------------
@@ -219,20 +221,12 @@ func (e *VolcEngine) handleMessage(msg *protocols.Message) {
 		msg.EventType == protocols.EventType_TTSSentenceEnd:
 		e.handleSentenceEnd(msg.Payload)
 
-	// case msg.MsgType == protocols.MsgTypeError:
-
+	case msg.MsgType == protocols.MsgTypeError:
+		logrus.Warnf("volcengine: received error message: %s", msg.String())
 	case msg.EventType == protocols.EventType_SessionFinished:
-		// 设置当前 streamer 的 EOS 标志，表示数据已全部接收完成
-		e.streamerMu.RLock()
-		streamer := e.streamer
-		e.streamerMu.RUnlock()
-		if streamer != nil {
-			// 使用 Streamer 自己的锁来修改 EOS，因为 Stream() 方法在读取 EOS 时也使用了这个锁
-			streamer.mu.Lock()
-			streamer.EOS = true
-			streamer.mu.Unlock()
+		if e.streamer != nil {
+			e.streamer.SetError(ErrEndOfStream)
 		}
-		// 发送完成通知
 		e.sessionFinishedCh <- struct{}{}
 
 	case msg.EventType == protocols.EventType_SessionStarted:
@@ -269,6 +263,7 @@ func (e *VolcEngine) StartSession() (*Streamer, error) {
 	e.SessionID = uuid.New().String()
 	e.recvFirstAudio = false
 	e.resetTimings()
+	e.sessionFinished.Store(false)
 
 	if err := e.startSession(e.conn); err != nil {
 		return nil, err
@@ -279,6 +274,10 @@ func (e *VolcEngine) StartSession() (*Streamer, error) {
 }
 
 func (e *VolcEngine) FinishSession() error {
+	if !e.sessionFinished.CompareAndSwap(false, true) {
+		return nil
+	}
+
 	if err := e.finishSession(); err != nil {
 		return err
 	}
@@ -298,9 +297,9 @@ func (e *VolcEngine) Synthesize(text string) error {
 
 	// 重置进度和时间信息，开始新的合成任务
 	streamer.ResetProgress()
-	e.timingsMutex.Lock()
+	e.mu.Lock()
 	e.timings = e.timings[:0] // 清空时间信息
-	e.timingsMutex.Unlock()
+	e.mu.Unlock()
 	streamer.SetTimings(nil) // 清空 streamer 的时间信息
 
 	ttsReq := VolcRequest{
@@ -330,9 +329,9 @@ func (e *VolcEngine) setStreamer(s *Streamer) {
 }
 
 func (e *VolcEngine) resetTimings() {
-	e.timingsMutex.Lock()
+	e.mu.Lock()
 	e.timings = e.timings[:0]
-	e.timingsMutex.Unlock()
+	e.mu.Unlock()
 }
 func (e *VolcEngine) Close() error {
 	var closeErr error
@@ -448,26 +447,22 @@ func (e *VolcEngine) handleSentenceEnd(payload []byte) {
 		return
 	}
 
-	e.timingsMutex.Lock()
+	e.mu.Lock()
 	e.timings = append(e.timings, timing)
 	timingsCopy := make([]SentenceTiming, len(e.timings))
 	copy(timingsCopy, e.timings)
-	e.timingsMutex.Unlock()
+	e.mu.Unlock()
 
-	// 获取当前 streamer（线程安全）
-	e.streamerMu.RLock()
-	streamer := e.streamer
-	e.streamerMu.RUnlock()
-
-	if streamer != nil {
+	// handleSentenceEnd 在 handleMessage 中调用，handleMessage 在 recvLoop 中单线程顺序执行，不需要 streamerMu 锁
+	if e.streamer != nil {
 		// 更新 streamer 的时间信息
-		streamer.SetTimings(timingsCopy)
+		e.streamer.SetTimings(timingsCopy)
 
 		// 计算总时长并更新 streamer
 		if len(timing.Words) > 0 {
 			lastWord := timing.Words[len(timing.Words)-1]
 			totalDuration := lastWord.EndTime
-			streamer.SetTotalDuration(totalDuration)
+			e.streamer.SetTotalDuration(totalDuration)
 			logrus.Infof("volc: sentence end, total duration: %.2fs, words: %d", totalDuration, len(timing.Words))
 		}
 	}
@@ -475,8 +470,8 @@ func (e *VolcEngine) handleSentenceEnd(payload []byte) {
 
 // GetTimings 获取所有句子的时间信息
 func (e *VolcEngine) GetTimings() []SentenceTiming {
-	e.timingsMutex.RLock()
-	defer e.timingsMutex.RUnlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	result := make([]SentenceTiming, len(e.timings))
 	copy(result, e.timings)
 	return result
@@ -485,8 +480,8 @@ func (e *VolcEngine) GetTimings() []SentenceTiming {
 // GetCurrentWord 根据当前播放时间获取正在播放的词
 // 如果当前时间不在任何词的时间范围内，返回最近播放的词或下一个要播放的词
 func (e *VolcEngine) GetCurrentWord(currentTime float64) *WordTiming {
-	e.timingsMutex.RLock()
-	defer e.timingsMutex.RUnlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 
 	var lastWord *WordTiming
 	var nextWord *WordTiming
