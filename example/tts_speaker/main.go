@@ -10,8 +10,8 @@ import (
 
 func main() {
 	ttsOpt := tts.VolcEngineOption{
-		VoiceType:  "zh_male_lengkugege_emo_v2_mars_bigtts",
-		ResourceID: "seed-tts-1.0",
+		VoiceType:  "zh_female_meilinvyou_saturn_bigtts",
+		ResourceID: "seed-tts-2.0",
 		AccessKey:  "n1uNFm540_2oItTs0UsULkWWvuzQiXbD",
 		AppKey:     "5711022755",
 		Encoding:   "pcm",
@@ -74,19 +74,34 @@ func main() {
 	}()
 
 	// 合成并播放语音
-	// 第一个调用：start=true 表示开始新 session，end=false 表示不结束 session
-	if err := speaker.Say("欢迎来到美丽新世界!", true, false); err != nil {
+	//第一个调用：start=true 表示开始新 session，end=false 表示不结束 session
+	if err := speaker.Say(tts.SayRequest{
+		Text:    "欢迎来到美丽新世界!",
+		Start:   true,
+		End:     false,
+		Emotion: "happy",
+	}); err != nil {
 		log.Fatalf("Failed to synthesize: %v", err)
 	}
 
 	// 第二个调用：start=false 表示继续使用当前 session，end=true 表示结束 session
 	// 注意：这会等待 session 真正完成后才返回
-	if err := speaker.Say("让我们一起跳舞吧!", false, true); err != nil {
+	if err := speaker.Say(tts.SayRequest{
+		Text:    "让我们一起跳舞吧!",
+		Start:   false,
+		End:     true,
+		Emotion: "",
+	}); err != nil {
 		log.Fatalf("Failed to synthesize: %v", err)
 	}
 
 	// 第三个调用：start=true 表示开始新 session（因为上一个已经结束），end=true 表示结束 session
-	if err := speaker.Say("大傻春，你要干嘛!", true, true); err != nil {
+	if err := speaker.Say(tts.SayRequest{
+		Text:    "大傻春，你要干嘛!",
+		Start:   true,
+		End:     true,
+		Emotion: "angry",
+	}); err != nil {
 		log.Fatalf("Failed to synthesize: %v", err)
 	}
 

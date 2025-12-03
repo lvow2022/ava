@@ -6,7 +6,7 @@ import (
 
 type Engine interface {
 	Initialize(ctx context.Context) error
-	Start() (*Streamer, error)
+	Start(emotion string) (*Streamer, error) // emotion 参数用于设置情感，可以为空
 	Synthesize(text string) error
 	End() error
 	Close() error

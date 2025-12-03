@@ -16,18 +16,34 @@ func NewTagAwareSpeaker(s *Speaker) *TagAwareSpeaker {
 	// say 标签
 	tas.parser.RegisterTag("say", TagCallbacks{
 		OnStart: func(attrs map[string]string) {
-			if err := s.Say("", true, false); err != nil {
+			emotion := attrs["emotion"] // 从属性中获取 emotion
+			if err := s.Say(SayRequest{
+				Text:    "",
+				Start:   true,
+				End:     false,
+				Emotion: emotion,
+			}); err != nil {
 				fmt.Println("开始 Say 错误:", err)
 			}
 			fmt.Println("[say] 开始播放，属性:", attrs)
 		},
 		OnMiddle: func(text string) {
-			if err := s.Say(text, false, false); err != nil {
+			if err := s.Say(SayRequest{
+				Text:    text,
+				Start:   false,
+				End:     false,
+				Emotion: "",
+			}); err != nil {
 				fmt.Println("Say 错误:", err)
 			}
 		},
 		OnEnd: func() {
-			if err := s.Say("", false, true); err != nil {
+			if err := s.Say(SayRequest{
+				Text:    "",
+				Start:   false,
+				End:     true,
+				Emotion: "",
+			}); err != nil {
 				fmt.Println("结束 Say 错误:", err)
 			}
 			fmt.Println("[say] 播放结束")

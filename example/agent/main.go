@@ -21,8 +21,8 @@ func main() {
 	// 初始化 Speaker 管理器
 	speakerManager := tts.GetGlobalManager()
 	speakerManager.SetConfig(&tts.ToolSpeakerConfig{
-		VoiceType:  "zh_male_lengkugege_emo_v2_mars_bigtts",
-		ResourceID: "seed-tts-1.0",
+		VoiceType:  "saturn_zh_female_keainvsheng_tob",
+		ResourceID: "seed-tts-2.0",
 		AccessKey:  "n1uNFm540_2oItTs0UsULkWWvuzQiXbD",
 		AppKey:     "5711022755",
 		Encoding:   "pcm",
@@ -80,7 +80,10 @@ func main() {
 
 
 可用的 XML 标签：
-- <say>文本内容</say>: 将标签内的文本内容转换为语音播放。所有需要播放给用户的文本都必须放在此标签内。
+- <say emotion="情感值">文本内容</say>: 将标签内的文本内容转换为语音播放。所有需要播放给用户的文本都必须放在此标签内。
+  * emotion 属性（可选）：设置语音的情感，可选值包括：happy（开心）、sad（悲伤）、angry（生气）、surprised（惊讶）、fear（恐惧）、hate（厌恶）、excited（激动）、coldness（冷漠）、neutral（中性）、depressed（沮丧）、lovey-dovey（撒娇）、shy（害羞）、comfort（安慰鼓励）、tension（咆哮/焦急）、tender（温柔）、storytelling（讲故事/自然讲述）、radio（情感电台）、magnetic（磁性）
+  * 如果不指定 emotion，将使用默认情感
+
 - <stop></stop>: 立即停止当前正在播放的语音。仅在 is_playing 为 true 时使用，当用户明确要求停止、打断播放，或者输入了有意义的指令需要停止当前播放时使用。
 - <ignore></ignore>: 忽略用户输入，继续播放当前语音。仅在 is_playing 为 true 时使用，当用户输入无关字符、无意义内容、随意输入（如"叽里呱啦"、"啊啊啊"、"123"等）时使用此标签。
 - 标签有 reason 属性，可以将理由写入到 reason。

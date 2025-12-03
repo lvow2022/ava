@@ -253,7 +253,7 @@ func (e *VolcEngine) handleAudio(audio []byte) {
 
 // ------------------------ Session Logic ------------------------
 
-func (e *VolcEngine) Start() (*Streamer, error) {
+func (e *VolcEngine) Start(emotion string) (*Streamer, error) {
 	if e.conn == nil {
 		return nil, errors.New("connection not initialized")
 	}
@@ -265,7 +265,7 @@ func (e *VolcEngine) Start() (*Streamer, error) {
 	e.resetTimings()
 	e.sessionFinished.Store(false)
 
-	if err := e.startSession(e.conn); err != nil {
+	if err := e.startSession(e.conn, emotion); err != nil {
 		return nil, err
 	}
 
@@ -380,7 +380,19 @@ func (e *VolcEngine) closeConnection() error {
 }
 
 // startSession 内部方法，用于启动 session
-func (e *VolcEngine) startSession(conn *websocket.Conn) error {
+func (e *VolcEngine) startSession(conn *websocket.Conn, emotion string) error {
+	audioParams := &VolcReqAudioParams{
+		Format:          e.opt.Encoding,
+		SampleRate:      int32(e.opt.SampleRate),
+		EnableTimestamp: true,
+		SpeechRate:      convertSpeechRate(e.opt.SpeedRatio),
+	}
+
+	// 如果提供了 emotion，设置到 AudioParams 中
+	if emotion != "" {
+		audioParams.Emotion = emotion
+	}
+
 	startReq := VolcRequest{
 		//User: &TTSUser{
 		//	UID: uuid.New().String(),
@@ -388,13 +400,8 @@ func (e *VolcEngine) startSession(conn *websocket.Conn) error {
 		Event:     int32(protocols.EventType_StartSession),
 		Namespace: "BidirectionalTTS",
 		ReqParams: &VolcReqParams{
-			Speaker: e.opt.VoiceType,
-			AudioParams: &VolcReqAudioParams{
-				Format:          e.opt.Encoding,
-				SampleRate:      int32(e.opt.SampleRate),
-				EnableTimestamp: true,
-				SpeechRate:      convertSpeechRate(e.opt.SpeedRatio),
-			},
+			Speaker:     e.opt.VoiceType,
+			AudioParams: audioParams,
 		},
 	}
 	payload, _ := json.Marshal(&startReq)

@@ -18,6 +18,15 @@ type Progress struct {
 	Percentage  float64     // 播放进度百分比 (0-100)
 }
 
+// SayRequest 表示 Say 方法的请求参数
+type SayRequest struct {
+	Text    string // 要合成的文本内容
+	Start   bool   // 是否启动新 session
+	End     bool   // 是否结束 session
+	Emotion string // 情感设置（可选），如：happy, sad, angry 等
+	// 未来可以扩展更多参数，如：Speed, Pitch, Volume 等
+}
+
 type Speaker struct {
 	tts         Engine
 	streamQueue *StreamQueue
@@ -47,24 +56,28 @@ func NewSpeaker(tts Engine) *Speaker {
 	return s
 }
 
-func (s *Speaker) Say(text string, start, end bool) error {
+// Say 使用 SayRequest 进行语音合成和播放
+func (s *Speaker) Say(req SayRequest) error {
 	var streamer *Streamer
 	var err error
 
-	if start {
-		streamer, err = s.tts.Start()
+	if req.Start {
+		streamer, err = s.tts.Start(req.Emotion)
 		if err != nil {
 			return fmt.Errorf("start session failed: %w", err)
 		}
 		s.streamQueue.Push(streamer)
 	}
 
-	err = s.tts.Synthesize(text)
-	if err != nil {
-		return fmt.Errorf("synthesize failed: %w", err)
+	// 只有当 Text 不为空时才调用 Synthesize
+	if req.Text != "" {
+		err = s.tts.Synthesize(req.Text)
+		if err != nil {
+			return fmt.Errorf("synthesize failed: %w", err)
+		}
 	}
 
-	if end {
+	if req.End {
 		if err := s.tts.End(); err != nil {
 			logrus.Warnf("speaker: failed to finish session: %v", err)
 		}
