@@ -18,11 +18,21 @@ type ToolSpeakerManager struct {
 
 // ToolSpeakerConfig 配置 Speaker 管理器
 type ToolSpeakerConfig struct {
-	// VolcEngine 配置
+	// 认证信息
+	AccessKey string
+	AppKey    string
+
+	// 方式1：使用预定义音色（推荐）
+	Voice VoiceProfile
+
+	// 方式2：使用音色名称（便捷方式）
+	VoiceName string
+
+	// 方式3：传统方式（保持向后兼容）
 	VoiceType  string
 	ResourceID string
-	AccessKey  string
-	AppKey     string
+
+	// 音频参数（可选，会覆盖音色的默认值）
 	Encoding   string
 	SampleRate int
 	BitDepth   int
@@ -76,19 +86,62 @@ func (m *ToolSpeakerManager) GetSpeaker(ctx context.Context) (*Speaker, error) {
 		}
 
 		// 创建 Engine
-		engineOpt := VolcEngineOption{
-			VoiceType:  m.config.VoiceType,
-			ResourceID: m.config.ResourceID,
-			AccessKey:  m.config.AccessKey,
-			AppKey:     m.config.AppKey,
-			Encoding:   m.config.Encoding,
-			SampleRate: m.config.SampleRate,
-			BitDepth:   m.config.BitDepth,
-			Channels:   m.config.Channels,
-			SpeedRatio: m.config.SpeedRatio,
+		var engine *VolcEngine
+		var err error
+
+		// 优先使用预定义音色
+		if m.config.Voice.VoiceType != "" {
+			opts := []VolcEngineOptionModifier{}
+			if m.config.Encoding != "" {
+				opts = append(opts, WithEncoding(m.config.Encoding))
+			}
+			if m.config.SampleRate > 0 {
+				opts = append(opts, WithSampleRate(m.config.SampleRate))
+			}
+			if m.config.SpeedRatio > 0 {
+				opts = append(opts, WithSpeedRatio(m.config.SpeedRatio))
+			}
+			if m.config.BitDepth > 0 {
+				opts = append(opts, WithBitDepth(m.config.BitDepth))
+			}
+			if m.config.Channels > 0 {
+				opts = append(opts, WithChannels(m.config.Channels))
+			}
+			engine, err = NewVolcEngineWithVoice(m.config.Voice, m.config.AccessKey, m.config.AppKey, opts...)
+		} else if m.config.VoiceName != "" {
+			opts := []VolcEngineOptionModifier{}
+			if m.config.Encoding != "" {
+				opts = append(opts, WithEncoding(m.config.Encoding))
+			}
+			if m.config.SampleRate > 0 {
+				opts = append(opts, WithSampleRate(m.config.SampleRate))
+			}
+			if m.config.SpeedRatio > 0 {
+				opts = append(opts, WithSpeedRatio(m.config.SpeedRatio))
+			}
+			if m.config.BitDepth > 0 {
+				opts = append(opts, WithBitDepth(m.config.BitDepth))
+			}
+			if m.config.Channels > 0 {
+				opts = append(opts, WithChannels(m.config.Channels))
+			}
+			engine, err = NewVolcEngineWithVoiceName(m.config.VoiceName, m.config.AccessKey, m.config.AppKey, opts...)
+		} else {
+			// 传统方式
+			engineOpt := VolcEngineOption{
+				VoiceType:  m.config.VoiceType,
+				ResourceID: m.config.ResourceID,
+				AccessKey:  m.config.AccessKey,
+				AppKey:     m.config.AppKey,
+				Encoding:   m.config.Encoding,
+				SampleRate: m.config.SampleRate,
+				BitDepth:   m.config.BitDepth,
+				Channels:   m.config.Channels,
+				SpeedRatio: m.config.SpeedRatio,
+			}
+			engine, err = NewVolcEngine(engineOpt)
 		}
 
-		engine, err := NewVolcEngine(engineOpt)
 		if err != nil {
 			m.initErr = err
 			return

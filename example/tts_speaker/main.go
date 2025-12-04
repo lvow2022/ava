@@ -9,22 +9,47 @@ import (
 )
 
 func main() {
-	ttsOpt := tts.VolcEngineOption{
-		VoiceType:  "zh_female_meilinvyou_saturn_bigtts",
-		ResourceID: "seed-tts-2.0",
-		AccessKey:  "n1uNFm540_2oItTs0UsULkWWvuzQiXbD",
-		AppKey:     "5711022755",
-		Encoding:   "pcm",
-		SampleRate: 16000,
-		BitDepth:   16,
-		Channels:   1,
-		SpeedRatio: 1.1,
-	}
+	// 方式1：使用预定义音色（推荐）
+	accessKey := "n1uNFm540_2oItTs0UsULkWWvuzQiXbD"
+	appKey := "5711022755"
 
-	ttsEngine, err := tts.NewVolcEngine(ttsOpt)
+	ttsEngine, err := tts.NewVolcEngineWithVoice(
+		tts.VoiceMeilinNvyou,
+		accessKey,
+		appKey,
+		tts.WithSpeedRatio(1.1), // 可选：自定义语速
+	)
 	if err != nil {
 		log.Fatalf("Failed to create tts engine: %v", err)
 	}
+
+	// 方式2：使用音色名称（便捷方式）
+	// ttsEngine, err := tts.NewVolcEngineWithVoiceName(
+	// 	"meilin_nvyou",
+	// 	accessKey,
+	// 	appKey,
+	// 	tts.WithSpeedRatio(1.1),
+	// )
+	// if err != nil {
+	// 	log.Fatalf("Failed to create tts engine: %v", err)
+	// }
+
+	// 方式3：传统方式（保持向后兼容）
+	// ttsOpt := tts.VolcEngineOption{
+	// 	VoiceType:  "zh_female_meilinvyou_saturn_bigtts",
+	// 	ResourceID: "seed-tts-2.0",
+	// 	AccessKey:  accessKey,
+	// 	AppKey:     appKey,
+	// 	Encoding:   "pcm",
+	// 	SampleRate: 16000,
+	// 	BitDepth:   16,
+	// 	Channels:   1,
+	// 	SpeedRatio: 1.1,
+	// }
+	// ttsEngine, err := tts.NewVolcEngine(ttsOpt)
+	// if err != nil {
+	// 	log.Fatalf("Failed to create tts engine: %v", err)
+	// }
 
 	// 初始化引擎
 	ctx := context.Background()

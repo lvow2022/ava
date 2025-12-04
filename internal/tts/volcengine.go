@@ -141,6 +141,7 @@ type VolcEngine struct {
 
 // ------------------------ Constructor ------------------------
 
+// NewVolcEngine 使用 VolcEngineOption 创建引擎（传统方式，保持向后兼容）
 func NewVolcEngine(opt VolcEngineOption) (*VolcEngine, error) {
 	return &VolcEngine{
 		BaseEngine:        NewBaseEngine(nil),
@@ -148,6 +149,21 @@ func NewVolcEngine(opt VolcEngineOption) (*VolcEngine, error) {
 		sessionFinishedCh: make(chan struct{}, 1),
 		sessionStartedCh:  make(chan struct{}, 1),
 	}, nil
+}
+
+// NewVolcEngineWithVoice 使用预定义音色创建引擎（推荐方式）
+func NewVolcEngineWithVoice(voice VoiceProfile, accessKey, appKey string, opts ...VolcEngineOptionModifier) (*VolcEngine, error) {
+	option := voice.ToVolcEngineOption(accessKey, appKey, opts...)
+	return NewVolcEngine(option)
+}
+
+// NewVolcEngineWithVoiceName 通过音色名称创建引擎（便捷方式）
+func NewVolcEngineWithVoiceName(voiceName, accessKey, appKey string, opts ...VolcEngineOptionModifier) (*VolcEngine, error) {
+	voice, ok := GetVoice(voiceName)
+	if !ok {
+		return nil, fmt.Errorf("voice '%s' not found, available voices: %v", voiceName, ListVoices())
+	}
+	return NewVolcEngineWithVoice(voice, accessKey, appKey, opts...)
 }
 
 // ------------------------ Initialization ------------------------
