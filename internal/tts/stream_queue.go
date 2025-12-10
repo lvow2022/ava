@@ -30,7 +30,7 @@ func (q *StreamQueue) StopCurrent() {
 	defer q.mu.Unlock()
 	if q.current != nil {
 		if s, ok := q.current.(*Streamer); ok {
-			s.Stop()
+			s.Cancel()
 		}
 	}
 }

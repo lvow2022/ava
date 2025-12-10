@@ -227,7 +227,7 @@ func (e *VolcEngine) handleMessage(msg *protocols.Message) {
 		logrus.Warnf("volcengine: received error message: %s", msg.String())
 	case msg.EventType == protocols.EventType_SessionFinished:
 		if e.streamer != nil {
-			e.streamer.EOS()
+			e.streamer.Close()
 		}
 		e.sessionFinishedCh <- struct{}{}
 
@@ -345,7 +345,7 @@ func (e *VolcEngine) Close() error {
 		streamer := e.streamer
 		e.streamerMu.RUnlock()
 		if streamer != nil {
-			streamer.Stop()
+			streamer.Cancel()
 		}
 		// 关闭 websocket 连接
 		if err := e.closeConnection(); err != nil {
