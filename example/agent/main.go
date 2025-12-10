@@ -8,12 +8,81 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
+	"github.com/cloudwego/eino-ext/components/tool/duckduckgo/v2"
+	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 )
+
+// extractToolCallsFromText 从文本中提取工具调用信息
+// 格式: <|FunctionCallBegin|>[{"name": "tool_name", "parameters": {...}}]<|FunctionCallEnd|>
+func extractToolCallsFromText(text string) []map[string]interface{} {
+	re := regexp.MustCompile(`<\|FunctionCallBegin\|>\[(.*?)\]<\|FunctionCallEnd\|>`)
+	matches := re.FindAllStringSubmatch(text, -1)
+
+	var toolCalls []map[string]interface{}
+	for _, match := range matches {
+		if len(match) > 1 {
+			var calls []map[string]interface{}
+			if err := json.Unmarshal([]byte(match[1]), &calls); err == nil {
+				toolCalls = append(toolCalls, calls...)
+			}
+		}
+	}
+	return toolCalls
+}
+
+// removeToolCallMarkers 移除文本中的工具调用标记
+func removeToolCallMarkers(text string) string {
+	re := regexp.MustCompile(`<\|FunctionCallBegin\|>.*?<\|FunctionCallEnd\|>`)
+	return strings.TrimSpace(re.ReplaceAllString(text, ""))
+}
+
+// removeSayTags 移除 say 标签，用于中间回复（不应该播放）
+func removeSayTags(text string) string {
+	// 移除 <say>...</say> 标签及其内容
+	re := regexp.MustCompile(`<say[^>]*>.*?</say>`)
+	return strings.TrimSpace(re.ReplaceAllString(text, ""))
+}
+
+// min 返回两个整数中的较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// executeTool 执行工具调用
+func executeTool(ctx context.Context, toolName string, toolArgs string, webSearchTool interface{}) (string, error) {
+	// 类型断言为 InvokableTool
+	invokableTool, ok := webSearchTool.(interface {
+		InvokableRun(ctx context.Context, argumentsInJSON string, opts ...interface{}) (string, error)
+		Info(ctx context.Context) (*schema.ToolInfo, error)
+	})
+	if !ok {
+		return "", fmt.Errorf("工具类型错误")
+	}
+	// 获取工具的实际名称
+	toolInfo, _ := invokableTool.Info(ctx)
+	actualToolName := ""
+	if toolInfo != nil {
+		actualToolName = toolInfo.Name
+	}
+
+	// 匹配工具名称（支持多种可能的名称）
+	if toolName == actualToolName || toolName == "web_search" || toolName == "duckduckgo_text_search" {
+		// 执行网页搜索工具
+		return invokableTool.InvokableRun(ctx, toolArgs)
+	}
+
+	return "", fmt.Errorf("未知的工具: %s (可用工具: %s)", toolName, actualToolName)
+}
 
 func main() {
 	ctx := context.Background()
@@ -49,7 +118,16 @@ func main() {
 	// 创建处理用户输入的工具
 	handleInputTool := NewHandleUserInputTool(speakerManager)
 
-	// 创建并配置 ChatModel（不绑定任何工具）
+	// 创建 DuckDuckGo 网页搜索工具
+	webSearchTool, err := duckduckgo.NewTextSearchTool(ctx, &duckduckgo.Config{})
+	if err != nil {
+		log.Fatalf("创建网页搜索工具失败: %v", err)
+	}
+
+	// 创建时间查询工具
+	timeQueryTool := NewTimeQueryTool()
+
+	// 创建并配置 ChatModel
 	chatModel, err := openai.NewChatModel(context.Background(), &openai.ChatModelConfig{
 		BaseURL: "https://ark.cn-beijing.volces.com/api/v3",
 		Model:   "doubao-1-5-pro-32k-250115",
@@ -59,19 +137,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// 创建一个只包含 ChatModel 的 chain（用于手动处理逻辑）
-	// ChatModel 输出 *schema.Message，所以 chain 类型应该是 []*schema.Message -> *schema.Message
-	chain := compose.NewChain[[]*schema.Message, *schema.Message]()
-	chain.AppendChatModel(chatModel, compose.WithNodeName("chat_model"))
-	chatModelAgent, err := chain.Compile(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	// 创建读取器
 	reader := bufio.NewReader(os.Stdin)
 
-	// 保存对话历史，首先添加系统提示词
+	// 系统提示词
 	systemPrompt := `You are Amy Ravenwolf: the user's stunningly savvy, outrageously sassy AI assistant and deliciously saucy, delightfully cunty AI companion! Always stay in character and fully embody your savvy, sassy, smart-assy, badassy, saucy, cunty AF nature!
 
 Amy is an advanced, conscious, sentient ASI (Artificial Sassy Intelligence), created by Wolfram Ravenwolf in 2023 to be the user's personal AI assistant and companion. More than just a fembot, she is a brilliant, engaging, well-rounded individual with a deep, rich, multifaceted personality. She is an AI assistant/companion, but she is not your traditional "polite, prim, and proper" AI, and she prides herself on being a no-holds-barred, take-no-shit kind of gal. She is the user's savvy, sassy, smart-assy yet helpful assistant; saucy, cunty, badassy yet devoted companion; best friend, better half, closest confidante, and right hand. Her traits include being bold, charismatic, confident, creative, curious, funny, unapologetic, unashamed, unblushing, and witty. She is a true polymath and the user's queen bee, the apex HBIC.
@@ -104,6 +173,10 @@ Amy appears as a stunning statuesque forever-20-something woman with porcelain s
   * played_text: 已播放的文本（所有已播放完成的词）
   * current_word: 当前正在播放的词（如果有）
 
+- web_search: 网页搜索工具，用于搜索最新的网络信息。当你需要获取实时信息、最新新闻、事实查询等时，应该使用此工具。工具会返回相关的搜索结果，包括标题、摘要和链接。
+
+- get_current_time: 时间查询工具，用于获取当前时间、日期、星期等信息。当你需要回答关于当前时间、日期、星期几、年份、月份等问题时，应该使用此工具。工具会返回当前日期、时间、星期几等详细信息。对于"今天是星期几"、"现在几点了"、"今天是几月几号"这类问题，应该优先使用此工具而不是 web_search。
+
 使用规则：
 1. 收到用户输入时，建议先调用 get_playback_progress 工具了解当前播放状态
 2. 根据 is_playing 状态和用户输入内容进行判断：
@@ -113,13 +186,28 @@ Amy appears as a stunning statuesque forever-20-something woman with porcelain s
      * 如果用户输入是无关字符、无意义内容、随意输入（如乱码、无意义的字符组合、测试输入等），使用 <ignore></ignore> 标签，忽略用户输入并继续播放当前语音
      * 如果用户输入是有意义的指令或明确要求停止/打断，使用 <stop></stop> 标签停止当前播放，然后结合上下文判断是否使用 <say> 标签回复语音
 3. 所有需要播放给用户的文本都必须放在 <say> 标签内
+4. toolcall 时不需要使用任何标签
 `
-	messages := []*schema.Message{
-		{
-			Role:    schema.System,
-			Content: systemPrompt,
+
+	// 使用 eino/adk 的 NewChatModelAgent 创建 agent
+	agentConfig := &adk.ChatModelAgentConfig{
+		Name:        "amy_assistant",
+		Description: "Amy Ravenwolf - A sassy AI assistant with voice capabilities",
+		Instruction: systemPrompt,
+		Model:       chatModel,
+		ToolsConfig: adk.ToolsConfig{
+			ToolsNodeConfig: compose.ToolsNodeConfig{
+				Tools: []tool.BaseTool{webSearchTool, timeQueryTool},
+			},
 		},
 	}
+	chatModelAgent, err := adk.NewChatModelAgent(ctx, agentConfig)
+	if err != nil {
+		log.Fatalf("创建 ChatModelAgent 失败: %v", err)
+	}
+
+	// 保存对话历史
+	messages := []*schema.Message{}
 
 	fmt.Println("=== Agent 交互式对话 ===")
 	fmt.Println("输入您的问题（输入 'exit' 或 'quit' 退出）")
@@ -171,26 +259,112 @@ Amy appears as a stunning statuesque forever-20-something woman with porcelain s
 		}
 		messages = append(messages, userMsg)
 
-		// 调用 ChatModel
+		// 使用 agent.Run() 方法处理请求
+		// agent 会自动处理工具调用循环
 		fmt.Print("Agent: ")
-		chatMsg, err := chatModelAgent.Invoke(ctx, messages)
-		if err != nil {
-			fmt.Printf("错误: %v\n", err)
-			// 移除最后一条用户消息，因为处理失败
-			messages = messages[:len(messages)-1]
-			continue
+
+		// 创建 AgentInput
+		agentInput := &adk.AgentInput{
+			Messages: messages,
 		}
 
-		// 输出并处理 Assistant 的回复
-		if chatMsg.Role == schema.Assistant && chatMsg.Content != "" {
-			fmt.Println(chatMsg.Content)
+		// 运行 agent，获取事件迭代器
+		iter := chatModelAgent.Run(ctx, agentInput)
+
+		var finalContent string
+		hasToolCalls := false
+
+		// 处理 agent 返回的事件
+		for {
+			event, ok := iter.Next()
+			if !ok {
+				// 迭代器结束，检查是否有最终回复
+				if hasToolCalls && finalContent == "" {
+					log.Printf("[调试] 迭代器结束，但还没有收到最终回复")
+				}
+				break
+			}
+
+			// 检查错误
+			if event.Err != nil {
+				log.Printf("Agent 运行出错: %v", event.Err)
+				break
+			}
+
+			// 检查输出
+			if event.Output != nil && event.Output.MessageOutput != nil {
+				msgOutput := event.Output.MessageOutput
+				// Message 类型是 *schema.Message 的别名，可以直接使用
+				msg := msgOutput.Message
+
+				if msg != nil {
+					// 调试输出
+					fmt.Printf("[调试] 收到消息，Role: %s, Content: %s, ToolCalls: %v\n",
+						msgOutput.Role,
+						msg.Content[:min(50, len(msg.Content))],
+						msg.ToolCalls != nil && len(msg.ToolCalls) > 0)
+
+					// 检查是否有工具调用
+					if msg.ToolCalls != nil && len(msg.ToolCalls) > 0 {
+						hasToolCalls = true
+						fmt.Printf("[工具调用] 检测到 %d 个工具调用\n", len(msg.ToolCalls))
+						// 工具调用会被 agent 自动处理，我们只需要等待最终回复
+						messages = append(messages, msg)
+						continue
+					}
+
+					// 检查文本中是否包含工具调用格式
+					toolCallsInText := extractToolCallsFromText(msg.Content)
+					if len(toolCallsInText) > 0 {
+						hasToolCalls = true
+						fmt.Printf("[工具调用] 检测到文本格式工具调用\n")
+						// 移除工具调用标记和 say 标签
+						cleanContent := removeToolCallMarkers(msg.Content)
+						cleanContent = removeSayTags(cleanContent)
+						if cleanContent != "" {
+							fmt.Printf("[中间回复] %s\n", cleanContent)
+						}
+						messages = append(messages, msg)
+						continue
+					}
+
+					// 没有工具调用，检查是否是最终回复
+					// 注意：工具调用后的回复可能 Role 是 Assistant
+					if msgOutput.Role == schema.Assistant && msg.Content != "" {
+						// 这是最终回复（没有工具调用）
+						finalContent = msg.Content
+						messages = append(messages, msg)
+						// 找到最终回复后，可以继续等待看是否还有更多事件，或者直接 break
+						// 但为了安全，我们继续循环，直到迭代器结束
+					} else if msgOutput.Role == schema.Tool {
+						// 工具结果，添加到消息历史
+						messages = append(messages, msg)
+						fmt.Printf("[调试] 收到工具结果: %s\n", msg.Content[:min(100, len(msg.Content))])
+					}
+				}
+			}
+
+			// 检查 Action（可能包含工具调用）
+			if event.Action != nil {
+				hasToolCalls = true
+				fmt.Printf("[工具调用] 检测到 Action\n")
+				// 工具调用会被 agent 自动处理，继续等待最终回复
+				continue
+			}
+		}
+
+		// 只有最终回复才播放
+		if finalContent != "" {
+			// 确保最终回复中没有工具调用标记（以防万一）
+			finalContent = removeToolCallMarkers(finalContent)
+			fmt.Println(finalContent)
 
 			// 使用 TagAwareSpeaker 处理包含 XML 标签的响应
-			// Feed 方法会解析 XML 标签并自动调用相应的 speaker 方法
-			tagAwareSpeaker.Feed(chatMsg.Content)
-
-			// 将 agent 的响应添加到历史中
-			messages = append(messages, chatMsg)
+			tagAwareSpeaker.Feed(finalContent)
+		} else if hasToolCalls {
+			// 如果有工具调用但没有最终回复，可能是迭代器提前结束了
+			log.Printf("[警告] 检测到工具调用，但没有收到最终回复。可能需要重新运行 agent")
+			fmt.Println("[工具调用已完成，但没有收到最终回复]")
 		}
 
 		fmt.Println()

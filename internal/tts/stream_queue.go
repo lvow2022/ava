@@ -12,8 +12,8 @@ type StreamQueue struct {
 	queue   []beep.Streamer
 }
 
-// GetCurrentStreamer 获取当前正在播放的 Streamer（如果是 *Streamer 类型）
-func (q *StreamQueue) GetCurrentStreamer() *Streamer {
+// CurrentStreamer 获取当前正在播放的 Streamer（如果是 *Streamer 类型）
+func (q *StreamQueue) CurrentStreamer() *Streamer {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.current != nil {
@@ -30,7 +30,7 @@ func (q *StreamQueue) StopCurrent() {
 	defer q.mu.Unlock()
 	if q.current != nil {
 		if s, ok := q.current.(*Streamer); ok {
-			s.Close()
+			s.Stop()
 		}
 	}
 }

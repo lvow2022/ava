@@ -117,7 +117,7 @@ func (s *Speaker) Stop() {
 // GetProgress 获取当前播放进度
 func (s *Speaker) GetProgress() *Progress {
 	// 从 StreamQueue 获取当前正在播放的 streamer
-	currentStreamer := s.streamQueue.GetCurrentStreamer()
+	currentStreamer := s.streamQueue.CurrentStreamer()
 	if currentStreamer == nil {
 		return &Progress{}
 	}
@@ -136,10 +136,9 @@ func (s *Speaker) GetProgress() *Progress {
 		}
 	}
 
-	// 如果 Engine 是 VolcEngine，尝试获取当前词
-	if volcEngine, ok := s.tts.(*VolcEngine); ok {
-		progress.CurrentWord = volcEngine.GetCurrentWord(currentTime)
-	}
+	// 获取时间戳并计算当前词（所有 Engine 都支持）
+	timingList := s.tts.WordTimestamps()
+	progress.CurrentWord = GetCurrentWordFromTimings(timingList, currentTime)
 
 	// 从 streamer 获取已播放文本
 	if currentStreamer != nil {
@@ -149,10 +148,7 @@ func (s *Speaker) GetProgress() *Progress {
 	return progress
 }
 
-// GetTimings 获取所有句子的时间信息（仅对 VolcEngine 有效）
+// GetTimings 获取所有句子的时间信息（所有 Engine 都支持）
 func (s *Speaker) GetTimings() []SentenceTiming {
-	if volcEngine, ok := s.tts.(*VolcEngine); ok {
-		return volcEngine.GetTimings()
-	}
-	return nil
+	return s.tts.WordTimestamps()
 }

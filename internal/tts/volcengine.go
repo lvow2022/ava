@@ -104,18 +104,6 @@ type VolcEngineOption struct {
 	SpeedRatio float32 `json:"speedRatio"  default:"1.0"`
 }
 
-type WordTiming struct {
-	Word       string  `json:"word"`
-	StartTime  float64 `json:"startTime"`
-	EndTime    float64 `json:"endTime"`
-	Confidence float64 `json:"confidence"`
-}
-
-type SentenceTiming struct {
-	Text  string       `json:"text"`
-	Words []WordTiming `json:"words"`
-}
-
 type VolcEngine struct {
 	*BaseEngine
 	opt  VolcEngineOption
@@ -132,8 +120,6 @@ type VolcEngine struct {
 
 	sessionFinishedCh chan struct{}
 	sessionStartedCh  chan struct{}
-	mu                sync.RWMutex
-	timings           []SentenceTiming
 
 	recvFirstAudio  bool
 	sessionFinished atomic.Bool // 防止重复调用 finishSession
@@ -241,7 +227,7 @@ func (e *VolcEngine) handleMessage(msg *protocols.Message) {
 		logrus.Warnf("volcengine: received error message: %s", msg.String())
 	case msg.EventType == protocols.EventType_SessionFinished:
 		if e.streamer != nil {
-			e.streamer.SetError(ErrEndOfStream)
+			e.streamer.EOS()
 		}
 		e.sessionFinishedCh <- struct{}{}
 
@@ -313,10 +299,8 @@ func (e *VolcEngine) Synthesize(text string) error {
 
 	// 重置进度和时间信息，开始新的合成任务
 	streamer.ResetProgress()
-	e.mu.Lock()
-	e.timings = e.timings[:0] // 清空时间信息
-	e.mu.Unlock()
-	streamer.SetTimings(nil) // 清空 streamer 的时间信息
+	e.BaseEngine.ResetTimings() // 清空时间信息
+	streamer.SetTimings(nil)    // 清空 streamer 的时间信息
 
 	ttsReq := VolcRequest{
 		Event:     int32(protocols.EventType_TaskRequest),
@@ -345,10 +329,14 @@ func (e *VolcEngine) setStreamer(s *Streamer) {
 }
 
 func (e *VolcEngine) resetTimings() {
-	e.mu.Lock()
-	e.timings = e.timings[:0]
-	e.mu.Unlock()
+	e.BaseEngine.ResetTimings()
 }
+
+// WordTimestamps 实现 Engine 接口，委托给 BaseEngine
+func (e *VolcEngine) WordTimestamps() []SentenceTiming {
+	return e.BaseEngine.WordTimestamps()
+}
+
 func (e *VolcEngine) Close() error {
 	var closeErr error
 
@@ -357,7 +345,7 @@ func (e *VolcEngine) Close() error {
 		streamer := e.streamer
 		e.streamerMu.RUnlock()
 		if streamer != nil {
-			streamer.Close()
+			streamer.Stop()
 		}
 		// 关闭 websocket 连接
 		if err := e.closeConnection(); err != nil {
@@ -470,11 +458,11 @@ func (e *VolcEngine) handleSentenceEnd(payload []byte) {
 		return
 	}
 
-	e.mu.Lock()
-	e.timings = append(e.timings, timing)
-	timingsCopy := make([]SentenceTiming, len(e.timings))
-	copy(timingsCopy, e.timings)
-	e.mu.Unlock()
+	// 添加到 BaseEngine 的时间戳列表
+	e.BaseEngine.AddTiming(timing)
+
+	// 获取时间戳的副本用于更新 streamer
+	timingsCopy := e.BaseEngine.GetTimings()
 
 	// handleSentenceEnd 在 handleMessage 中调用，handleMessage 在 recvLoop 中单线程顺序执行，不需要 streamerMu 锁
 	if e.streamer != nil {
@@ -489,63 +477,6 @@ func (e *VolcEngine) handleSentenceEnd(payload []byte) {
 			logrus.Infof("volc: sentence end, total duration: %.2fs, words: %d", totalDuration, len(timing.Words))
 		}
 	}
-}
-
-// GetTimings 获取所有句子的时间信息
-func (e *VolcEngine) GetTimings() []SentenceTiming {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	result := make([]SentenceTiming, len(e.timings))
-	copy(result, e.timings)
-	return result
-}
-
-// GetCurrentWord 根据当前播放时间获取正在播放的词
-// 如果当前时间不在任何词的时间范围内，返回最近播放的词或下一个要播放的词
-func (e *VolcEngine) GetCurrentWord(currentTime float64) *WordTiming {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	var lastWord *WordTiming
-	var nextWord *WordTiming
-	var foundNext bool
-
-	for _, sentence := range e.timings {
-		for _, word := range sentence.Words {
-			// 如果当前时间在词的时间范围内，直接返回
-			if currentTime >= word.StartTime && currentTime <= word.EndTime {
-				return &word
-			}
-
-			// 记录最近播放的词（结束时间 <= 当前时间）
-			if word.EndTime <= currentTime {
-				lastWord = &word
-			}
-
-			// 记录下一个要播放的词（开始时间 > 当前时间，且还没找到下一个）
-			if !foundNext && word.StartTime > currentTime {
-				nextWord = &word
-				foundNext = true
-			}
-		}
-	}
-
-	// 如果当前时间在词与词之间的间隔中，优先返回最近播放的词
-	// 如果最近播放的词距离当前时间较远（>0.5秒），则返回下一个要播放的词
-	if lastWord != nil {
-		timeSinceLastWord := currentTime - lastWord.EndTime
-		if timeSinceLastWord <= 0.5 {
-			return lastWord
-		}
-	}
-
-	// 返回下一个要播放的词
-	if nextWord != nil {
-		return nextWord
-	}
-
-	// 如果都没有，返回最近播放的词
-	return lastWord
 }
 
 func convertSpeechRate(speedRatio float32) int32 {

@@ -21,6 +21,7 @@ type Streamer struct {
 	buf    []byte
 
 	err error
+	eos bool
 	// 播放进度跟踪
 	bytesPlayed   int64     // 已播放的字节数
 	startTime     time.Time // 开始播放的时间
@@ -63,8 +64,7 @@ func (s *Streamer) Stream(samples [][2]float64) (int, bool) {
 	required := len(samples) * bytesPerSample
 
 	if len(s.buf) == 0 {
-		// 如果 buffer 为空且已经到达流结束，返回 false
-		if s.err == ErrEndOfStream {
+		if s.eos {
 			return 0, false
 		}
 		return 0, true // 没数据但还没结束 → 等待动态 append
@@ -119,17 +119,15 @@ func (s *Streamer) Err() error {
 	return s.err
 }
 
-// SetError 设置流的错误状态，只有在当前没有错误时才设置（避免覆盖已有错误）
-func (s *Streamer) SetError(err error) {
+func (s *Streamer) EOS() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.err == nil {
-		s.err = err
-	}
+	s.eos = true
+
 }
 
-// Close 立即停止流，即使缓冲区中还有数据（流将不再可用）
-func (s *Streamer) Close() {
+// Stop 立即停止流，即使缓冲区中还有数据（流将不再可用）
+func (s *Streamer) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.err = ErrStreamStopped
