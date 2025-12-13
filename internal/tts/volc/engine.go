@@ -21,111 +21,56 @@ func init() {
 	//RegisterTTS("tts.volcengine", NewVolcStreamEngine)
 }
 
-type VolcEngineOption struct {
-	VoiceType  string  `json:"voiceType"`
-	ResourceID string  `json:"resourceID"`
-	AccessKey  string  `json:"accessKey" `
-	AppKey     string  `json:"appKey"`
-	Encoding   string  `json:"encoding" default:"pcm"`
-	SampleRate int     `json:"sampleRate"  default:"16000"`
-	BitDepth   int     `json:"bitDepth"  default:"16"`
-	Channels   int     `json:"channels"  default:"1"`
-	SpeedRatio float32 `json:"speedRatio"  default:"1.0"`
+// AuthConfig 认证配置
+type AuthConfig struct {
+	AccessKey string
+	AppKey    string
 }
 
-// VolcEngineOptionModifier 用于修改 VolcEngineOption 的函数类型
-type VolcEngineOptionModifier func(*VolcEngineOption)
+// VoiceConfig 音色配置
+type VoiceConfig struct {
+	Voice *VoiceProfile
+}
 
-// WithBitDepth 设置位深度
-func WithBitDepth(depth int) VolcEngineOptionModifier {
-	return func(opt *VolcEngineOption) {
-		opt.BitDepth = depth
+// NewVoiceConfig 使用 VoiceProfile 创建音色配置
+func NewVoiceConfig(voice *VoiceProfile) VoiceConfig {
+	return VoiceConfig{Voice: voice}
+}
+
+// NewVoiceConfigByName 通过音色名称创建音色配置
+func NewVoiceConfigByName(voiceName string) (VoiceConfig, error) {
+	voice, ok := GetVoice(voiceName)
+	if !ok {
+		return VoiceConfig{}, fmt.Errorf("voice not found: %s. Available voices: %v", voiceName, ListVoices())
 	}
+	return VoiceConfig{Voice: &voice}, nil
 }
 
-// WithChannels 设置声道数
-func WithChannels(channels int) VolcEngineOptionModifier {
-	return func(opt *VolcEngineOption) {
-		opt.Channels = channels
-	}
+// CodecConfig 编解码配置
+type CodecConfig struct {
+	Encoding   string  // 编码格式，默认 "pcm"
+	SampleRate int     // 采样率，默认 16000
+	BitDepth   int     // 位深度，默认 16
+	Channels   int     // 声道数，默认 1
+	SpeedRatio float32 // 语速，默认 1.0
 }
 
-// WithSampleRate 设置采样率
-func WithSampleRate(rate int) VolcEngineOptionModifier {
-	return func(opt *VolcEngineOption) {
-		opt.SampleRate = rate
-	}
-}
-
-// WithSpeedRatio 设置语速
-func WithSpeedRatio(ratio float32) VolcEngineOptionModifier {
-	return func(opt *VolcEngineOption) {
-		opt.SpeedRatio = ratio
-	}
-}
-
-// WithEncoding 设置编码格式
-func WithEncoding(encoding string) VolcEngineOptionModifier {
-	return func(opt *VolcEngineOption) {
-		opt.Encoding = encoding
-	}
-}
-
-// WithAccessKey 设置访问密钥
-func WithAccessKey(accessKey string) VolcEngineOptionModifier {
-	return func(opt *VolcEngineOption) {
-		opt.AccessKey = accessKey
-	}
-}
-
-// WithAppKey 设置应用密钥
-func WithAppKey(appKey string) VolcEngineOptionModifier {
-	return func(opt *VolcEngineOption) {
-		opt.AppKey = appKey
-	}
-}
-
-// WithVoice 使用预定义音色配置
-func WithVoice(voice VoiceProfile) VolcEngineOptionModifier {
-	return func(opt *VolcEngineOption) {
-		opt.VoiceType = voice.VoiceType
-		opt.ResourceID = voice.ResourceID
-		// 应用音色的默认值
-		if voice.DefaultSampleRate > 0 {
-			opt.SampleRate = voice.DefaultSampleRate
-		}
-		if voice.DefaultSpeedRatio > 0 {
-			opt.SpeedRatio = voice.DefaultSpeedRatio
-		}
-	}
-}
-
-// WithVoiceName 通过音色名称查找并配置音色
-// 如果音色不存在，会在 NewVolcEngine 中返回包含可用音色列表的错误
-func WithVoiceName(voiceName string) VolcEngineOptionModifier {
-	return func(opt *VolcEngineOption) {
-		voice, ok := GetVoice(voiceName)
-		if !ok {
-			// 清空以触发验证错误，错误信息会包含可用音色列表
-			opt.VoiceType = ""
-			opt.ResourceID = ""
-			return
-		}
-		opt.VoiceType = voice.VoiceType
-		opt.ResourceID = voice.ResourceID
-		// 应用音色的默认值
-		if voice.DefaultSampleRate > 0 {
-			opt.SampleRate = voice.DefaultSampleRate
-		}
-		if voice.DefaultSpeedRatio > 0 {
-			opt.SpeedRatio = voice.DefaultSpeedRatio
-		}
+// DefaultCodecConfig 返回默认编解码配置
+func DefaultCodecConfig() CodecConfig {
+	return CodecConfig{
+		Encoding:   "pcm",
+		SampleRate: 16000,
+		BitDepth:   16,
+		Channels:   1,
+		SpeedRatio: 1.0,
 	}
 }
 
 type VolcEngine struct {
-	*tts.BaseEngine
-	opt    VolcEngineOption
+	auth  AuthConfig
+	voice VoiceConfig
+	codec CodecConfig
+
 	client *ws.WSClient
 
 	mu       sync.Mutex
@@ -140,41 +85,45 @@ type VolcEngine struct {
 	sessionFinishedCh   chan struct{}
 	sessionStartedCh    chan struct{}
 	recvFirstAudio      bool
+
+	closeOnce sync.Once // 确保只关闭一次
 }
 
 // ------------------------ Constructor ------------------------
 
-// NewVolcEngine 使用 option 模式创建引擎并自动建立连接
-// 必需参数通过 option 函数提供：WithAccessKey, WithAppKey, 以及音色配置（WithVoice/WithVoiceName 或直接设置 VoiceType/ResourceID）
-func NewVolcEngine(ctx context.Context, opts ...VolcEngineOptionModifier) (*VolcEngine, error) {
-	// 初始化默认配置
-	opt := VolcEngineOption{
-		Encoding:   "pcm",
-		SampleRate: 16000,
-		BitDepth:   16,
-		Channels:   1,
-		SpeedRatio: 1.0,
-	}
-
-	// 应用所有 option
-	for _, modifier := range opts {
-		modifier(&opt)
-	}
-
+// NewVolcEngine 创建新的 VolcEngine 并自动建立连接
+// auth 和 voice 是必需参数，codec 可选（如果未提供则使用默认值）
+func NewVolcEngine(ctx context.Context, auth AuthConfig, voice VoiceConfig, codec ...CodecConfig) (*VolcEngine, error) {
 	// 验证必需字段
-	if opt.AccessKey == "" {
-		return nil, errors.New("accessKey is required, use WithAccessKey() option")
+	if auth.AccessKey == "" {
+		return nil, errors.New("accessKey is required")
 	}
-	if opt.AppKey == "" {
-		return nil, errors.New("appKey is required, use WithAppKey() option")
+	if auth.AppKey == "" {
+		return nil, errors.New("appKey is required")
 	}
-	if opt.VoiceType == "" && opt.ResourceID == "" {
-		return nil, fmt.Errorf("voice configuration is required, use WithVoice(), WithVoiceName(), or set VoiceType/ResourceID directly. Available voices: %v", ListVoices())
+	if voice.Voice == nil {
+		return nil, errors.New("voice configuration is required, use NewVoiceConfig() or NewVoiceConfigByName()")
+	}
+
+	// 使用提供的 codec 配置或默认值
+	var codecConfig CodecConfig
+	if len(codec) > 0 {
+		codecConfig = codec[0]
+	} else {
+		codecConfig = DefaultCodecConfig()
+		// 如果音色有默认值，应用它们
+		if voice.Voice.DefaultSampleRate > 0 {
+			codecConfig.SampleRate = voice.Voice.DefaultSampleRate
+		}
+		if voice.Voice.DefaultSpeedRatio > 0 {
+			codecConfig.SpeedRatio = voice.Voice.DefaultSpeedRatio
+		}
 	}
 
 	e := &VolcEngine{
-		BaseEngine:          tts.NewBaseEngine(nil),
-		opt:                 opt,
+		auth:                auth,
+		voice:               voice,
+		codec:               codecConfig,
 		connectionStartedCh: make(chan struct{}),
 		sessionFinishedCh:   make(chan struct{}),
 		sessionStartedCh:    make(chan struct{}),
@@ -185,9 +134,9 @@ func NewVolcEngine(ctx context.Context, opts ...VolcEngineOptionModifier) (*Volc
 
 	// 建立 WebSocket 连接
 	header := http.Header{}
-	header.Set("X-Api-App-Key", opt.AppKey)
-	header.Set("X-Api-Access-Key", opt.AccessKey)
-	header.Set("X-Api-Resource-Id", opt.ResourceID)
+	header.Set("X-Api-App-Key", auth.AppKey)
+	header.Set("X-Api-Access-Key", auth.AccessKey)
+	header.Set("X-Api-Resource-Id", voice.Voice.ResourceID)
 	header.Set("X-Api-Connect-Id", uuid.New().String())
 	header.Set("X-Control-Require-Usage-Tokens-Return", "*")
 
@@ -305,11 +254,10 @@ func (e *VolcEngine) Start(emotion string) (*tts.Streamer, error) {
 	if e.streamer != nil {
 		e.streamer.Close()
 	}
-	e.streamer = tts.NewStreamer(beep.SampleRate(e.opt.SampleRate), e.opt.Channels)
+	e.streamer = tts.NewStreamer(beep.SampleRate(e.codec.SampleRate), e.codec.Channels)
 	e.mu.Unlock()
 
 	e.SessionID = uuid.New().String()
-	e.resetTimings()
 
 	if err := e.startSession(emotion); err != nil {
 		return nil, err
@@ -324,6 +272,33 @@ func (e *VolcEngine) Start(emotion string) (*tts.Streamer, error) {
 	}
 
 	return e.streamer, nil
+}
+
+// Close 主动关闭连接并清理资源
+// 实现 Engine 接口，可以安全地多次调用，只会关闭一次
+func (e *VolcEngine) Close() error {
+	e.closeOnce.Do(func() {
+		// 先关闭 streamer
+		e.mu.Lock()
+		if e.streamer != nil {
+			e.streamer.Close()
+			e.streamer = nil
+		}
+		e.mu.Unlock()
+
+		// 关闭 WebSocket 连接（这会触发 OnClose 回调）
+		if e.client != nil {
+			e.client.Close()
+		}
+
+		// 取消 context
+		if e.cancel != nil {
+			e.cancel()
+		}
+
+		logrus.Info("volc: engine closed")
+	})
+	return nil
 }
 
 func (e *VolcEngine) End() error {
@@ -369,28 +344,18 @@ func (e *VolcEngine) Synthesize(text string) error {
 	return nil
 }
 
-// ------------------------ Streamer helpers ------------------------
-
-func (e *VolcEngine) resetTimings() {
-	e.BaseEngine.ResetTimings()
-}
-
-func (e *VolcEngine) WordTimestamps() []tts.SentenceTiming {
-	return e.BaseEngine.WordTimestamps()
-}
-
 func (e *VolcEngine) startSession(emotion string) error {
 	audioParams := &AudioParams{
-		Format:          e.opt.Encoding,
-		SampleRate:      int32(e.opt.SampleRate),
+		Format:          e.codec.Encoding,
+		SampleRate:      int32(e.codec.SampleRate),
 		EnableTimestamp: true,
-		SpeechRate:      convertSpeechRate(e.opt.SpeedRatio),
+		SpeechRate:      convertSpeechRate(e.codec.SpeedRatio),
 		Emotion:         emotion,
 	}
 
 	req := NewRequestBuilder().
 		WithEvent(EventType_StartSession).
-		WithSpeaker(e.opt.VoiceType).
+		WithSpeaker(e.voice.Voice.VoiceType).
 		WithAudioParams(audioParams).
 		Build()
 	payload, _ := json.Marshal(req)
@@ -425,29 +390,13 @@ func (e *VolcEngine) handleSentenceEnd(payload []byte) {
 		return
 	}
 
-	// 添加到 BaseEngine 的时间戳列表
-	e.BaseEngine.AddTiming(timing)
-
-	// 获取时间戳的副本用于更新 streamer
-	timingsCopy := e.BaseEngine.GetTimings()
-
-	// 更新 streamer 的时间信息（需要加锁保护）
+	// 直接添加到 streamer 的时间戳列表
 	e.mu.Lock()
-	streamer := e.streamer
+	if e.streamer != nil {
+		e.streamer.AddTiming(timing)
+	}
 	e.mu.Unlock()
 
-	if streamer != nil {
-		// 更新 streamer 的时间信息
-		streamer.SetTimings(timingsCopy)
-
-		// 计算总时长并更新 streamer
-		if len(timing.Words) > 0 {
-			lastWord := timing.Words[len(timing.Words)-1]
-			totalDuration := lastWord.EndTime
-			streamer.SetTotalDuration(totalDuration)
-			logrus.Infof("volc: sentence end, total duration: %.2fs, words: %d", totalDuration, len(timing.Words))
-		}
-	}
 }
 
 func convertSpeechRate(speedRatio float32) int32 {

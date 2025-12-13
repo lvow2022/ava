@@ -230,13 +230,6 @@ func (s *Streamer) Cancel() {
 	s.mu.Unlock()
 }
 
-// SetTotalDuration 设置总时长（秒）
-func (s *Streamer) SetTotalDuration(duration float64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.totalDuration = duration
-}
-
 // GetProgress 获取播放进度
 func (s *Streamer) GetProgress() (currentTime float64, totalTime float64) {
 	s.mu.RLock()
@@ -274,12 +267,20 @@ func (s *Streamer) ResetProgress() {
 	s.buf.Reset()
 }
 
-// SetTimings 设置时间信息（用于获取已播放文本）
-func (s *Streamer) SetTimings(timings []SentenceTiming) {
+// AddTiming 添加一个句子的时间信息
+func (s *Streamer) AddTiming(timing SentenceTiming) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.timings = make([]SentenceTiming, len(timings))
-	copy(s.timings, timings)
+	s.timings = append(s.timings, timing)
+}
+
+// GetTimings 获取所有句子的时间信息
+func (s *Streamer) GetTimings() []SentenceTiming {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]SentenceTiming, len(s.timings))
+	copy(result, s.timings)
+	return result
 }
 
 // GetPlayedText 根据当前播放时间获取已播放的文本（所有已播放完成的词拼接）

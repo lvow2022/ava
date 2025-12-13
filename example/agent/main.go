@@ -2,7 +2,7 @@ package main
 
 import (
 	"ava/internal/tts"
-	"ava/internal/tts/tools"
+	"ava/internal/tts/volc"
 	"bufio"
 	"context"
 	"encoding/json"
@@ -88,36 +88,38 @@ func executeTool(ctx context.Context, toolName string, toolArgs string, webSearc
 func main() {
 	ctx := context.Background()
 
-	// 初始化 Speaker 管理器
-	speakerManager := tools.GetGlobalManager()
-	speakerManager.SetConfig(&tools.ToolSpeakerConfig{
-		VoiceType:  "saturn_zh_female_keainvsheng_tob",
-		ResourceID: "seed-tts-2.0",
-		AccessKey:  "n1uNFm540_2oItTs0UsULkWWvuzQiXbD",
-		AppKey:     "5711022755",
-		Encoding:   "pcm",
-		SampleRate: 16000,
-		BitDepth:   16,
-		Channels:   1,
-		SpeedRatio: 1.1,
-	})
-
-	// 确保程序退出时清理资源
-	defer func() {
-		if err := speakerManager.Close(); err != nil {
-			log.Printf("Failed to close speaker manager: %v", err)
-		}
-	}()
-
-	// 获取 Speaker 并创建 TagAwareSpeaker
-	speaker, err := speakerManager.GetSpeaker(ctx)
+	// 创建 TTS Engine
+	ttsEngine, err := volc.NewVolcEngine(
+		ctx,
+		volc.AuthConfig{
+			AccessKey: "n1uNFm540_2oItTs0UsULkWWvuzQiXbD",
+			AppKey:    "5711022755",
+		},
+		volc.VoiceConfig{
+			Voice: &volc.VoiceProfile{
+				VoiceType:  "saturn_zh_female_keainvsheng_tob",
+				ResourceID: "seed-tts-2.0",
+			},
+		},
+		volc.CodecConfig{
+			Encoding:   "pcm",
+			SampleRate: 16000,
+			BitDepth:   16,
+			Channels:   1,
+			SpeedRatio: 1.1,
+		},
+	)
 	if err != nil {
-		log.Fatalf("获取 Speaker 失败: %v", err)
+		log.Fatalf("创建 TTS Engine 失败: %v", err)
 	}
+	defer ttsEngine.Close() // 确保资源清理
+
+	// 创建 Speaker
+	speaker := tts.NewSpeaker(ttsEngine)
 	tagAwareSpeaker := tts.NewTagAwareSpeaker(speaker)
 
 	// 创建处理用户输入的工具
-	handleInputTool := NewHandleUserInputTool(speakerManager)
+	handleInputTool := NewHandleUserInputTool(speaker)
 
 	// 创建 DuckDuckGo 网页搜索工具
 	webSearchTool, err := duckduckgo.NewTextSearchTool(ctx, &duckduckgo.Config{})

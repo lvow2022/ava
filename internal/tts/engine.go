@@ -18,10 +18,7 @@ type Engine interface {
 	Start(emotion string) (*Streamer, error) // emotion 参数用于设置情感，可以为空
 	Synthesize(text string) error
 	End() error
-
-	// WordTimestamps 返回所有句子的词级别时间戳信息
-	// 外部可以通过 WordTimestamps() 获取时间戳后，使用 GetCurrentWordFromTimings 辅助函数计算当前词
-	WordTimestamps() []SentenceTiming
+	Close() error // 关闭连接并清理资源
 }
 
 type EngineInfo struct {

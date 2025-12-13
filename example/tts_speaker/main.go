@@ -16,43 +16,51 @@ func main() {
 	accessKey := "n1uNFm540_2oItTs0UsULkWWvuzQiXbD"
 	appKey := "5711022755"
 
+	codec := volc.DefaultCodecConfig()
+	codec.SpeedRatio = 1.1 // 自定义语速
+
 	ttsEngine, err := volc.NewVolcEngine(
 		ctx,
-		volc.WithAccessKey(accessKey),
-		volc.WithAppKey(appKey),
-		volc.WithVoice(volc.VoiceTiaoPigongzhu),
-		volc.WithSpeedRatio(1.1), // 可选：自定义语速
+		volc.AuthConfig{
+			AccessKey: accessKey,
+			AppKey:    appKey,
+		},
+		volc.NewVoiceConfig(&volc.VoiceTiaoPigongzhu),
+		codec,
 	)
 	if err != nil {
 		log.Fatalf("Failed to create tts engine: %v", err)
 	}
+	defer ttsEngine.Close() // 确保资源清理
 
 	// 方式2：使用音色名称（便捷方式）
+	// voiceConfig, err := volc.NewVoiceConfigByName("meilin_nvyou")
+	// if err != nil {
+	// 	log.Fatalf("Failed to get voice config: %v", err)
+	// }
+	// codec := volc.DefaultCodecConfig()
+	// codec.SpeedRatio = 1.1
 	// ttsEngine, err := volc.NewVolcEngine(
 	// 	ctx,
-	// 	volc.WithAccessKey(accessKey),
-	// 	volc.WithAppKey(appKey),
-	// 	volc.WithVoiceName("meilin_nvyou"),
-	// 	volc.WithSpeedRatio(1.1),
+	// 	volc.AuthConfig{
+	// 		AccessKey: accessKey,
+	// 		AppKey:    appKey,
+	// 	},
+	// 	voiceConfig,
+	// 	codec,
 	// )
 	// if err != nil {
 	// 	log.Fatalf("Failed to create tts engine: %v", err)
 	// }
 
-	// 方式3：传统方式（直接设置 VoiceType 和 ResourceID）
+	// 方式3：使用默认 codec（不传 codec 参数）
 	// ttsEngine, err := volc.NewVolcEngine(
 	// 	ctx,
-	// 	volc.WithAccessKey(accessKey),
-	// 	volc.WithAppKey(appKey),
-	// 	func(opt *volc.VolcEngineOption) {
-	// 		opt.VoiceType = "zh_female_meilinvyou_saturn_bigtts"
-	// 		opt.ResourceID = "seed-tts-2.0"
-	// 		opt.Encoding = "pcm"
-	// 		opt.SampleRate = 16000
-	// 		opt.BitDepth = 16
-	// 		opt.Channels = 1
-	// 		opt.SpeedRatio = 1.1
+	// 	volc.AuthConfig{
+	// 		AccessKey: accessKey,
+	// 		AppKey:    appKey,
 	// 	},
+	// 	volc.NewVoiceConfig(&volc.VoiceTiaoPigongzhu),
 	// )
 	// if err != nil {
 	// 	log.Fatalf("Failed to create tts engine: %v", err)

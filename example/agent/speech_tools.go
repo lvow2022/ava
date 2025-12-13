@@ -1,10 +1,9 @@
 package main
 
 import (
-	"ava/internal/tts/tools"
+	"ava/internal/tts"
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -12,12 +11,12 @@ import (
 
 // HandleUserInputTool 处理用户输入的工具，查询播放进度并返回决策建议
 type HandleUserInputTool struct {
-	manager *tools.ToolSpeakerManager
+	speaker *tts.Speaker
 }
 
-func NewHandleUserInputTool(manager *tools.ToolSpeakerManager) *HandleUserInputTool {
+func NewHandleUserInputTool(speaker *tts.Speaker) *HandleUserInputTool {
 	return &HandleUserInputTool{
-		manager: manager,
+		speaker: speaker,
 	}
 }
 
@@ -49,13 +48,8 @@ func (ht *HandleUserInputTool) InvokableRun(ctx context.Context, argumentsInJSON
 
 	_ = json.Unmarshal([]byte(argumentsInJSON), &args)
 
-	speaker, err := ht.manager.GetSpeaker(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to get speaker: %w", err)
-	}
-
 	// 查询当前播放进度
-	progress := speaker.GetProgress()
+	progress := ht.speaker.GetProgress()
 
 	// 计算剩余时间
 	remainingTime := progress.TotalTime - progress.CurrentTime

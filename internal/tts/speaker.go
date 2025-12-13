@@ -129,19 +129,21 @@ func (s *Speaker) GetProgress() *Progress {
 		}
 	}
 
-	// 获取时间戳并计算当前词（所有 Engine 都支持）
-	timingList := s.tts.WordTimestamps()
+	// 从 streamer 获取时间戳并计算当前词
+	timingList := currentStreamer.GetTimings()
 	progress.CurrentWord = GetCurrentWordFromTimings(timingList, currentTime)
 
 	// 从 streamer 获取已播放文本
-	if currentStreamer != nil {
-		progress.PlayedText = currentStreamer.GetPlayedText(currentTime)
-	}
+	progress.PlayedText = currentStreamer.GetPlayedText(currentTime)
 
 	return progress
 }
 
-// GetTimings 获取所有句子的时间信息（所有 Engine 都支持）
+// GetTimings 获取所有句子的时间信息
 func (s *Speaker) GetTimings() []SentenceTiming {
-	return s.tts.WordTimestamps()
+	currentStreamer := s.streamQueue.CurrentStreamer()
+	if currentStreamer == nil {
+		return nil
+	}
+	return currentStreamer.GetTimings()
 }
