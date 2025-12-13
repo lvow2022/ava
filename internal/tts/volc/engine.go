@@ -379,24 +379,6 @@ func (e *VolcEngine) WordTimestamps() []tts.SentenceTiming {
 	return e.BaseEngine.WordTimestamps()
 }
 
-func (e *VolcEngine) buildStartSessionRequest(emotion string) ([]byte, error) {
-	audioParams := &AudioParams{
-		Format:          e.opt.Encoding,
-		SampleRate:      int32(e.opt.SampleRate),
-		EnableTimestamp: true,
-		SpeechRate:      convertSpeechRate(e.opt.SpeedRatio),
-		Emotion:         emotion,
-	}
-
-	startReq := NewRequestBuilder().
-		WithEvent(EventType_StartSession).
-		WithSpeaker(e.opt.VoiceType).
-		WithAudioParams(audioParams).
-		Build()
-
-	return json.Marshal(startReq)
-}
-
 func (e *VolcEngine) startSession(emotion string) error {
 	audioParams := &AudioParams{
 		Format:          e.opt.Encoding,
