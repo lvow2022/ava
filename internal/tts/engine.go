@@ -1,9 +1,5 @@
 package tts
 
-import (
-	"context"
-)
-
 // WordTiming 表示一个词的时间信息
 type WordTiming struct {
 	Word       string  `json:"word"`
@@ -19,11 +15,9 @@ type SentenceTiming struct {
 }
 
 type Engine interface {
-	Initialize(ctx context.Context) error
 	Start(emotion string) (*Streamer, error) // emotion 参数用于设置情感，可以为空
 	Synthesize(text string) error
 	End() error
-	Close() error
 
 	// WordTimestamps 返回所有句子的词级别时间戳信息
 	// 外部可以通过 WordTimestamps() 获取时间戳后，使用 GetCurrentWordFromTimings 辅助函数计算当前词

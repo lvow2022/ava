@@ -1,4 +1,4 @@
-package protocols
+package volc
 
 import (
 	"bytes"
@@ -712,4 +712,60 @@ func TaskRequest(conn *websocket.Conn, payload []byte, sessionID string) error {
 		return err
 	}
 	return conn.WriteMessage(websocket.BinaryMessage, frame)
+}
+
+type MessageBuilder struct {
+	msgType   MsgType
+	flag      MsgTypeFlagBits
+	eventType EventType
+	sessionID string
+	payload   []byte
+	err       error
+}
+
+func NewMessageBuilder() *MessageBuilder {
+	return &MessageBuilder{
+		msgType: MsgTypeFullClientRequest,
+		flag:    MsgTypeFlagWithEvent,
+	}
+}
+
+// WithMsgType 设置消息类型
+func (b *MessageBuilder) WithMsgType(msgType MsgType) *MessageBuilder {
+	b.msgType = msgType
+	return b
+}
+
+// WithFlag 设置消息标志
+func (b *MessageBuilder) WithFlag(flag MsgTypeFlagBits) *MessageBuilder {
+	b.flag = flag
+	return b
+}
+
+// WithEventType 设置事件类型
+func (b *MessageBuilder) WithEventType(eventType EventType) *MessageBuilder {
+	b.eventType = eventType
+	return b
+}
+
+// WithSessionID 设置会话ID
+func (b *MessageBuilder) WithSessionID(sessionID string) *MessageBuilder {
+	b.sessionID = sessionID
+	return b
+}
+
+// WithPayload 直接设置 payload（字节数组）
+func (b *MessageBuilder) WithPayload(payload []byte) *MessageBuilder {
+	b.payload = payload
+	return b
+}
+
+// Build 构建 Message 对象
+func (b *MessageBuilder) Build() *Message {
+	msg, _ := NewMessage(b.msgType, b.flag)
+	msg.EventType = b.eventType
+	msg.SessionID = b.sessionID
+	msg.Payload = b.payload
+
+	return msg
 }

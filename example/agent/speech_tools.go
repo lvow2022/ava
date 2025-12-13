@@ -1,7 +1,7 @@
 package main
 
 import (
-	"ava/internal/tts"
+	"ava/internal/tts/tools"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,10 +12,10 @@ import (
 
 // HandleUserInputTool 处理用户输入的工具，查询播放进度并返回决策建议
 type HandleUserInputTool struct {
-	manager *tts.ToolSpeakerManager
+	manager *tools.ToolSpeakerManager
 }
 
-func NewHandleUserInputTool(manager *tts.ToolSpeakerManager) *HandleUserInputTool {
+func NewHandleUserInputTool(manager *tools.ToolSpeakerManager) *HandleUserInputTool {
 	return &HandleUserInputTool{
 		manager: manager,
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"ava/internal/tts"
+	"ava/internal/tts/volc"
 	"context"
 	"fmt"
 	"log"
@@ -9,53 +10,53 @@ import (
 )
 
 func main() {
+	ctx := context.Background()
+
 	// 方式1：使用预定义音色（推荐）
 	accessKey := "n1uNFm540_2oItTs0UsULkWWvuzQiXbD"
 	appKey := "5711022755"
 
-	ttsEngine, err := tts.NewVolcEngineWithVoice(
-		tts.VoiceMeilinNvyou,
-		accessKey,
-		appKey,
-		tts.WithSpeedRatio(1.1), // 可选：自定义语速
+	ttsEngine, err := volc.NewVolcEngine(
+		ctx,
+		volc.WithAccessKey(accessKey),
+		volc.WithAppKey(appKey),
+		volc.WithVoice(volc.VoiceTiaoPigongzhu),
+		volc.WithSpeedRatio(1.1), // 可选：自定义语速
 	)
 	if err != nil {
 		log.Fatalf("Failed to create tts engine: %v", err)
 	}
 
 	// 方式2：使用音色名称（便捷方式）
-	// ttsEngine, err := tts.NewVolcEngineWithVoiceName(
-	// 	"meilin_nvyou",
-	// 	accessKey,
-	// 	appKey,
-	// 	tts.WithSpeedRatio(1.1),
+	// ttsEngine, err := volc.NewVolcEngine(
+	// 	ctx,
+	// 	volc.WithAccessKey(accessKey),
+	// 	volc.WithAppKey(appKey),
+	// 	volc.WithVoiceName("meilin_nvyou"),
+	// 	volc.WithSpeedRatio(1.1),
 	// )
 	// if err != nil {
 	// 	log.Fatalf("Failed to create tts engine: %v", err)
 	// }
 
-	// 方式3：传统方式（保持向后兼容）
-	// ttsOpt := tts.VolcEngineOption{
-	// 	VoiceType:  "zh_female_meilinvyou_saturn_bigtts",
-	// 	ResourceID: "seed-tts-2.0",
-	// 	AccessKey:  accessKey,
-	// 	AppKey:     appKey,
-	// 	Encoding:   "pcm",
-	// 	SampleRate: 16000,
-	// 	BitDepth:   16,
-	// 	Channels:   1,
-	// 	SpeedRatio: 1.1,
-	// }
-	// ttsEngine, err := tts.NewVolcEngine(ttsOpt)
+	// 方式3：传统方式（直接设置 VoiceType 和 ResourceID）
+	// ttsEngine, err := volc.NewVolcEngine(
+	// 	ctx,
+	// 	volc.WithAccessKey(accessKey),
+	// 	volc.WithAppKey(appKey),
+	// 	func(opt *volc.VolcEngineOption) {
+	// 		opt.VoiceType = "zh_female_meilinvyou_saturn_bigtts"
+	// 		opt.ResourceID = "seed-tts-2.0"
+	// 		opt.Encoding = "pcm"
+	// 		opt.SampleRate = 16000
+	// 		opt.BitDepth = 16
+	// 		opt.Channels = 1
+	// 		opt.SpeedRatio = 1.1
+	// 	},
+	// )
 	// if err != nil {
 	// 	log.Fatalf("Failed to create tts engine: %v", err)
 	// }
-
-	// 初始化引擎
-	ctx := context.Background()
-	if err := ttsEngine.Initialize(ctx); err != nil {
-		log.Fatalf("Failed to initialize tts engine: %v", err)
-	}
 
 	// 创建 Speaker
 	speaker := tts.NewSpeaker(ttsEngine)

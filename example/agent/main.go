@@ -2,6 +2,7 @@ package main
 
 import (
 	"ava/internal/tts"
+	"ava/internal/tts/tools"
 	"bufio"
 	"context"
 	"encoding/json"
@@ -88,8 +89,8 @@ func main() {
 	ctx := context.Background()
 
 	// 初始化 Speaker 管理器
-	speakerManager := tts.GetGlobalManager()
-	speakerManager.SetConfig(&tts.ToolSpeakerConfig{
+	speakerManager := tools.GetGlobalManager()
+	speakerManager.SetConfig(&tools.ToolSpeakerConfig{
 		VoiceType:  "saturn_zh_female_keainvsheng_tob",
 		ResourceID: "seed-tts-2.0",
 		AccessKey:  "n1uNFm540_2oItTs0UsULkWWvuzQiXbD",

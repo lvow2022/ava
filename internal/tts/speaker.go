@@ -39,15 +39,8 @@ func NewSpeaker(tts Engine) *Speaker {
 	}
 
 	// 初始化 speaker
-	// 从 Engine 获取 format 信息（目前支持 VolcEngine）
-	var sampleRate beep.SampleRate
-
-	if volcEngine, ok := tts.(*VolcEngine); ok {
-		sampleRate = beep.SampleRate(volcEngine.opt.SampleRate)
-	} else {
-		// 默认值，如果 Engine 未初始化或不是 VolcEngine
-		sampleRate = beep.SampleRate(16000)
-	}
+	// 使用默认采样率，Engine 实现应该在创建 Streamer 时设置正确的采样率
+	sampleRate := beep.SampleRate(16000)
 
 	// 初始化 beep speaker
 	speaker.Init(sampleRate, sampleRate.N(time.Second/10))

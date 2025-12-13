@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"net/http"
+	"sync"
 
 	"github.com/gorilla/websocket"
 )
@@ -17,11 +18,12 @@ type EventHandler interface {
 
 // WSClient 通用 WebSocket 客户端
 type WSClient struct {
-	conn    *websocket.Conn
-	handler EventHandler
-	ctx     context.Context
-	cancel  context.CancelFunc
-	writeCh chan wsMessage
+	conn      *websocket.Conn
+	handler   EventHandler
+	ctx       context.Context
+	cancel    context.CancelFunc
+	writeCh   chan wsMessage
+	closeOnce sync.Once
 }
 
 type wsMessage struct {
@@ -95,17 +97,26 @@ func (c *WSClient) send(msgType int, data []byte) {
 	}
 }
 
-func (c *WSClient) SendText(text string) {
-	c.send(websocket.TextMessage, []byte(text))
+func (c *WSClient) SendText(data []byte) {
+	c.send(websocket.TextMessage, data)
 }
 
 func (c *WSClient) SendBinary(data []byte) {
 	c.send(websocket.BinaryMessage, data)
 }
 
-// Close 优雅关闭连接
+// Conn 获取底层 websocket 连接（用于向后兼容）
+func (c *WSClient) Conn() *websocket.Conn {
+	return c.conn
+}
+
+// Close 优雅关闭连接，确保只关闭一次
 func (c *WSClient) Close() {
-	c.cancel()
-	c.conn.Close()
-	c.handler.OnClose(c)
+	c.closeOnce.Do(func() {
+		c.cancel()
+		if c.conn != nil {
+			c.conn.Close()
+		}
+		c.handler.OnClose(c)
+	})
 }

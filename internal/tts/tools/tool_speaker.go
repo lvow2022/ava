@@ -1,6 +1,8 @@
-package tts
+package tools
 
 import (
+	"ava/internal/tts"
+	"ava/internal/tts/volc"
 	"context"
 	"errors"
 	"sync"
@@ -10,8 +12,8 @@ import (
 type ToolSpeakerManager struct {
 	mu      sync.RWMutex
 	once    sync.Once
-	speaker *Speaker
-	engine  Engine
+	speaker *tts.Speaker
+	engine  tts.Engine
 	config  *ToolSpeakerConfig
 	initErr error
 }
@@ -23,7 +25,7 @@ type ToolSpeakerConfig struct {
 	AppKey    string
 
 	// 方式1：使用预定义音色（推荐）
-	Voice VoiceProfile
+	Voice volc.VoiceProfile
 
 	// 方式2：使用音色名称（便捷方式）
 	VoiceName string
@@ -61,7 +63,7 @@ func (m *ToolSpeakerManager) SetConfig(config *ToolSpeakerConfig) {
 }
 
 // GetSpeaker 获取 Speaker 实例，如果未初始化则进行懒加载初始化
-func (m *ToolSpeakerManager) GetSpeaker(ctx context.Context) (*Speaker, error) {
+func (m *ToolSpeakerManager) GetSpeaker(ctx context.Context) (*tts.Speaker, error) {
 	m.mu.RLock()
 	if m.speaker != nil {
 		speaker := m.speaker
@@ -86,69 +88,50 @@ func (m *ToolSpeakerManager) GetSpeaker(ctx context.Context) (*Speaker, error) {
 		}
 
 		// 创建 Engine
-		var engine *VolcEngine
+		var engine *volc.VolcEngine
 		var err error
 
-		// 优先使用预定义音色
-		if m.config.Voice.VoiceType != "" {
-			opts := []VolcEngineOptionModifier{}
-			if m.config.Encoding != "" {
-				opts = append(opts, WithEncoding(m.config.Encoding))
-			}
-			if m.config.SampleRate > 0 {
-				opts = append(opts, WithSampleRate(m.config.SampleRate))
-			}
-			if m.config.SpeedRatio > 0 {
-				opts = append(opts, WithSpeedRatio(m.config.SpeedRatio))
-			}
-			if m.config.BitDepth > 0 {
-				opts = append(opts, WithBitDepth(m.config.BitDepth))
-			}
-			if m.config.Channels > 0 {
-				opts = append(opts, WithChannels(m.config.Channels))
-			}
-			engine, err = NewVolcEngineWithVoice(m.config.Voice, m.config.AccessKey, m.config.AppKey, opts...)
-		} else if m.config.VoiceName != "" {
-			opts := []VolcEngineOptionModifier{}
-			if m.config.Encoding != "" {
-				opts = append(opts, WithEncoding(m.config.Encoding))
-			}
-			if m.config.SampleRate > 0 {
-				opts = append(opts, WithSampleRate(m.config.SampleRate))
-			}
-			if m.config.SpeedRatio > 0 {
-				opts = append(opts, WithSpeedRatio(m.config.SpeedRatio))
-			}
-			if m.config.BitDepth > 0 {
-				opts = append(opts, WithBitDepth(m.config.BitDepth))
-			}
-			if m.config.Channels > 0 {
-				opts = append(opts, WithChannels(m.config.Channels))
-			}
-			engine, err = NewVolcEngineWithVoiceName(m.config.VoiceName, m.config.AccessKey, m.config.AppKey, opts...)
-		} else {
-			// 传统方式
-			engineOpt := VolcEngineOption{
-				VoiceType:  m.config.VoiceType,
-				ResourceID: m.config.ResourceID,
-				AccessKey:  m.config.AccessKey,
-				AppKey:     m.config.AppKey,
-				Encoding:   m.config.Encoding,
-				SampleRate: m.config.SampleRate,
-				BitDepth:   m.config.BitDepth,
-				Channels:   m.config.Channels,
-				SpeedRatio: m.config.SpeedRatio,
-			}
-			engine, err = NewVolcEngine(engineOpt)
+		// 构建 option 列表
+		opts := []volc.VolcEngineOptionModifier{
+			volc.WithAccessKey(m.config.AccessKey),
+			volc.WithAppKey(m.config.AppKey),
 		}
+
+		// 配置音色
+		if m.config.Voice.VoiceType != "" {
+			opts = append(opts, volc.WithVoice(m.config.Voice))
+		} else if m.config.VoiceName != "" {
+			opts = append(opts, volc.WithVoiceName(m.config.VoiceName))
+		} else {
+			// 传统方式：直接设置 VoiceType 和 ResourceID
+			voiceType := m.config.VoiceType
+			resourceID := m.config.ResourceID
+			opts = append(opts, func(opt *volc.VolcEngineOption) {
+				opt.VoiceType = voiceType
+				opt.ResourceID = resourceID
+			})
+		}
+
+		// 配置音频参数
+		if m.config.Encoding != "" {
+			opts = append(opts, volc.WithEncoding(m.config.Encoding))
+		}
+		if m.config.SampleRate > 0 {
+			opts = append(opts, volc.WithSampleRate(m.config.SampleRate))
+		}
+		if m.config.SpeedRatio > 0 {
+			opts = append(opts, volc.WithSpeedRatio(m.config.SpeedRatio))
+		}
+		if m.config.BitDepth > 0 {
+			opts = append(opts, volc.WithBitDepth(m.config.BitDepth))
+		}
+		if m.config.Channels > 0 {
+			opts = append(opts, volc.WithChannels(m.config.Channels))
+		}
+
+		engine, err = volc.NewVolcEngine(ctx, opts...)
 
 		if err != nil {
-			m.initErr = err
-			return
-		}
-
-		// 初始化 Engine
-		if err := engine.Initialize(ctx); err != nil {
 			m.initErr = err
 			return
 		}
@@ -157,7 +140,7 @@ func (m *ToolSpeakerManager) GetSpeaker(ctx context.Context) (*Speaker, error) {
 
 		// 创建 Speaker
 		// 注意：不需要在这里启动 session，Say() 方法会自动调用 Start()
-		speaker := NewSpeaker(engine)
+		speaker := tts.NewSpeaker(engine)
 		m.speaker = speaker
 	})
 
@@ -169,26 +152,17 @@ func (m *ToolSpeakerManager) GetSpeaker(ctx context.Context) (*Speaker, error) {
 	return m.speaker, nil
 }
 
-// Close 关闭 Speaker 和 Engine，释放资源
+// Close 关闭 Speaker，释放资源
+// Engine 的生命周期由 context 管理，连接关闭时会自动清理
 func (m *ToolSpeakerManager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	var errs []error
 
 	if m.speaker != nil {
 		m.speaker.Stop()
 	}
 
-	if m.engine != nil {
-		if err := m.engine.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-
+	// Engine 不需要显式关闭，资源会在连接关闭时自动清理
 	return nil
 }
+
