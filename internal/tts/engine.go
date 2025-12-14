@@ -15,8 +15,8 @@ type SentenceTiming struct {
 }
 
 type Engine interface {
-	Start(emotion string) (*Streamer, error) // emotion 参数用于设置情感，可以为空
-	Synthesize(text string) error
+	Start(emotion string, contextTexts []string) (*Streamer, error) // 启动 session，emotion 参数用于设置情感（可选，推荐使用 contextTexts 替代），contextTexts 用于上下文辅助合成（推荐使用，可通过自然语言描述替代 emotion）
+	Synthesize(text string, contextTexts []string) error            // 合成文本，contextTexts 用于上下文辅助合成（推荐使用，可通过自然语言描述替代 emotion）
 	End() error
 	Close() error // 关闭连接并清理资源
 }

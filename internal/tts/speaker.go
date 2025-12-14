@@ -20,10 +20,11 @@ type Progress struct {
 
 // SayRequest 表示 Say 方法的请求参数
 type SayRequest struct {
-	Text    string // 要合成的文本内容
-	Start   bool   // 是否启动新 session
-	End     bool   // 是否结束 session
-	Emotion string // 情感设置（可选），如：happy, sad, angry 等
+	Text         string   // 要合成的文本内容
+	Start        bool     // 是否启动新 session
+	End          bool     // 是否结束 session
+	Emotion      string   // 情感设置（可选，推荐使用 ContextTexts 替代），如：happy, sad, angry 等。如果提供了 ContextTexts，可以忽略此参数
+	ContextTexts []string // 上下文文本（推荐使用），用于模型对话式合成，能更好的体现语音情感。可以通过自然语言描述替代 Emotion 参数，例如："用颤抖沙哑、带着崩溃与绝望的哭腔"、"语气再欢乐一点" 等
 	// 未来可以扩展更多参数，如：Speed, Pitch, Volume 等
 }
 
@@ -55,7 +56,7 @@ func (s *Speaker) Say(req SayRequest) error {
 	var err error
 
 	if req.Start {
-		streamer, err = s.tts.Start(req.Emotion)
+		streamer, err = s.tts.Start(req.Emotion, req.ContextTexts)
 		if err != nil {
 			return fmt.Errorf("start session failed: %w", err)
 		}
@@ -64,7 +65,7 @@ func (s *Speaker) Say(req SayRequest) error {
 
 	// 只有当 Text 不为空时才调用 Synthesize
 	if req.Text != "" {
-		err = s.tts.Synthesize(req.Text)
+		err = s.tts.Synthesize(req.Text, req.ContextTexts)
 		if err != nil {
 			return fmt.Errorf("synthesize failed: %w", err)
 		}

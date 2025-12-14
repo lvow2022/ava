@@ -249,7 +249,7 @@ func (e *VolcEngine) dispatch(msg *Message) {
 
 // ------------------------ Session Logic ------------------------
 
-func (e *VolcEngine) Start(emotion string) (*tts.Streamer, error) {
+func (e *VolcEngine) Start(emotion string, contextTexts []string) (*tts.Streamer, error) {
 	e.mu.Lock()
 	if e.streamer != nil {
 		e.streamer.Close()
@@ -259,7 +259,7 @@ func (e *VolcEngine) Start(emotion string) (*tts.Streamer, error) {
 
 	e.SessionID = uuid.New().String()
 
-	if err := e.startSession(emotion); err != nil {
+	if err := e.startSession(emotion, contextTexts); err != nil {
 		return nil, err
 	}
 
@@ -324,11 +324,16 @@ func (e *VolcEngine) End() error {
 	return nil
 }
 
-func (e *VolcEngine) Synthesize(text string) error {
-	req := NewRequestBuilder().
+func (e *VolcEngine) Synthesize(text string, contextTexts []string) error {
+	builder := NewRequestBuilder().
 		WithEvent(EventType_TaskRequest).
-		WithText(text).
-		Build()
+		WithText(text)
+	
+	if len(contextTexts) > 0 {
+		builder = builder.WithContextTexts(contextTexts)
+	}
+	
+	req := builder.Build()
 	payload, _ := json.Marshal(req)
 
 	msg := NewMessageBuilder().
@@ -344,7 +349,7 @@ func (e *VolcEngine) Synthesize(text string) error {
 	return nil
 }
 
-func (e *VolcEngine) startSession(emotion string) error {
+func (e *VolcEngine) startSession(emotion string, contextTexts []string) error {
 	audioParams := &AudioParams{
 		Format:          e.codec.Encoding,
 		SampleRate:      int32(e.codec.SampleRate),
@@ -353,11 +358,16 @@ func (e *VolcEngine) startSession(emotion string) error {
 		Emotion:         emotion,
 	}
 
-	req := NewRequestBuilder().
+	builder := NewRequestBuilder().
 		WithEvent(EventType_StartSession).
 		WithSpeaker(e.voice.Voice.VoiceType).
-		WithAudioParams(audioParams).
-		Build()
+		WithAudioParams(audioParams)
+	
+	if len(contextTexts) > 0 {
+		builder = builder.WithContextTexts(contextTexts)
+	}
+	
+	req := builder.Build()
 	payload, _ := json.Marshal(req)
 
 	msg := NewMessageBuilder().

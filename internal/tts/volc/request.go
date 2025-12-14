@@ -1,5 +1,7 @@
 package volc
 
+import "encoding/json"
+
 // Request 表示发送给火山引擎的请求结构
 type Request struct {
 	User      *User      `json:"user"`
@@ -59,6 +61,21 @@ func (b *RequestBuilder) WithAudioParams(audioParams *AudioParams) *RequestBuild
 	return b
 }
 
+func (b *RequestBuilder) WithContextTexts(contextTexts []string) *RequestBuilder {
+	if b.req.ReqParams == nil {
+		b.req.ReqParams = &ReqParams{}
+	}
+	// 构建 additions 对象
+	additions := map[string]interface{}{
+		"context_texts": contextTexts,
+	}
+	// 将 additions 对象序列化为 JSON 字符串
+	if additionsJSON, err := json.Marshal(additions); err == nil {
+		b.req.ReqParams.Additions = string(additionsJSON)
+	}
+	return b
+}
+
 func (b *RequestBuilder) Build() *Request {
 	return &b.req
 }
@@ -74,12 +91,12 @@ type User struct {
 
 // ReqParams 请求参数
 type ReqParams struct {
-	Text        string            `json:"text,omitempty"`
-	Texts       *Texts            `json:"texts,omitempty"`
-	Ssml        string            `json:"ssml,omitempty"`
-	Speaker     string            `json:"speaker,omitempty"`
-	AudioParams *AudioParams      `json:"audio_params,omitempty"`
-	Additions   map[string]string `json:"additions,omitempty"`
+	Text        string       `json:"text,omitempty"`
+	Texts       *Texts       `json:"texts,omitempty"`
+	Ssml        string       `json:"ssml,omitempty"`
+	Speaker     string       `json:"speaker,omitempty"`
+	AudioParams *AudioParams `json:"audio_params,omitempty"`
+	Additions   string       `json:"additions,omitempty"` // additions 需要是 JSON 字符串
 }
 
 // ReqTexts 文本列表

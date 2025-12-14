@@ -25,7 +25,7 @@ func main() {
 			AccessKey: accessKey,
 			AppKey:    appKey,
 		},
-		volc.NewVoiceConfig(&volc.VoiceTiaoPigongzhu),
+		volc.NewVoiceConfig(&volc.VoiceMeilinNvyou),
 		codec,
 	)
 	if err != nil {
@@ -109,38 +109,43 @@ func main() {
 
 	// 合成并播放语音
 	//第一个调用：start=true 表示开始新 session，end=false 表示不结束 session
-	if err := speaker.Say(tts.SayRequest{
-		Text:    "欢迎来到美丽新世界!",
-		Start:   true,
-		End:     false,
-		Emotion: "happy",
-	}); err != nil {
-		log.Fatalf("Failed to synthesize: %v", err)
-	}
+	// 使用 context_texts 来调整语速
+	// if err := speaker.Say(tts.SayRequest{
+	// 	Text:         "欢迎来到美丽新世界!",
+	// 	Start:        true,
+	// 	End:          false,
+	// 	Emotion:      "happy",
+	// 	ContextTexts: []string{"你可以说慢一点吗？"},
+	// }); err != nil {
+	// 	log.Fatalf("Failed to synthesize: %v", err)
+	// }
 
 	// 第二个调用：start=false 表示继续使用当前 session，end=true 表示结束 session
 	// 注意：这会等待 session 真正完成后才返回
-	if err := speaker.Say(tts.SayRequest{
-		Text:    "让我们一起跳舞吧!",
-		Start:   false,
-		End:     true,
-		Emotion: "",
-	}); err != nil {
-		log.Fatalf("Failed to synthesize: %v", err)
-	}
+	// 使用 context_texts 来调整情绪/语气
+	// if err := speaker.Say(tts.SayRequest{
+	// 	Text:         "让我们一起跳舞吧!",
+	// 	Start:        false,
+	// 	End:          true,
+	// 	Emotion:      "",
+	// 	ContextTexts: []string{"嗯，你的语气再欢乐一点"},
+	// }); err != nil {
+	// 	log.Fatalf("Failed to synthesize: %v", err)
+	// }
 
-	// 第三个调用：start=true 表示开始新 session（因为上一个已经结束），end=true 表示结束 session
+	// 第五个调用：测试情绪/语气调整（痛心语气）
 	if err := speaker.Say(tts.SayRequest{
-		Text:    "大傻春，你要干嘛!",
-		Start:   true,
-		End:     true,
-		Emotion: "angry",
+		Text:  "我逆转时空九十九次救你，你却次次死于同一支暗箭。谢珩，原来不是天要亡你……是你宁死也不肯为我活下去",
+		Start: true,
+		End:   true,
+		//Emotion:      "angry",
+		ContextTexts: []string{"用颤抖沙哑、带着崩溃与绝望的哭腔，夹杂着质问与心碎的语气说"},
 	}); err != nil {
 		log.Fatalf("Failed to synthesize: %v", err)
 	}
 
 	// 等待播放完成或3秒后停止播放
-	<-time.After(5 * time.Second)
+	<-time.After(10 * time.Second)
 	speaker.Stop()
 
 	// 停止进度打印
