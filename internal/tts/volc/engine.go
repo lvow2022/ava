@@ -2,7 +2,7 @@ package volc
 
 import (
 	"ava/internal/tts"
-	"ava/pkg/ws"
+	"ava/pkg/websocket"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,7 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gopxl/beep"
-	"github.com/gorilla/websocket"
+	gorilla "github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
 
@@ -71,7 +71,7 @@ type VolcEngine struct {
 	voice VoiceConfig
 	codec CodecConfig
 
-	client *ws.WSClient
+	client websocket.WsClient
 
 	mu       sync.Mutex
 	streamer *tts.Streamer // 单 session streamer
@@ -142,15 +142,54 @@ func NewVolcEngine(ctx context.Context, auth AuthConfig, voice VoiceConfig, code
 
 	endpoint := "wss://openspeech.bytedance.com/api/v3/tts/bidirection"
 
-	client, err := ws.NewWSClient(endpoint, header, e)
+	config := websocket.WSConfig{
+		URL:     endpoint,
+		Headers: header,
+	}
+
+	wsClient, err := websocket.NewWsClient(e.ctx, config)
 	if err != nil {
-		e.cancel() // 清理 context
+		e.cancel()
 		return nil, fmt.Errorf("volc: dial websocket: %w", err)
 	}
 
-	e.client = client
+	e.client = wsClient
 
-	// 等待连接启动
+	// 启动消息处理循环来模拟原 EventHandler
+	go func() {
+		defer func() {
+			logrus.Info("volc: connection closed")
+			e.mu.Lock()
+			if e.streamer != nil {
+				e.streamer.Close()
+				e.streamer = nil
+			}
+			e.mu.Unlock()
+			if e.cancel != nil {
+				e.cancel()
+			}
+		}()
+
+		for {
+			select {
+			case <-e.ctx.Done():
+				return
+			case <-e.client.Done():
+				return
+			default:
+				msg, err := e.client.Recv(e.ctx)
+				if err != nil {
+					if gorilla.IsCloseError(err, gorilla.CloseNormalClosure) {
+						logrus.Info("volc: normal ws close")
+					} else if err.Error() != "context canceled" {
+						logrus.Warnf("volce: ws close error: %v", err)
+					}
+					return
+				}
+				e.OnMessage(e.client, 1, msg) // 1 = websocket.TextMessage
+			}
+		}
+	}()
 	select {
 	case <-e.connectionStartedCh:
 		logrus.Info("volc: connection started")
@@ -173,17 +212,17 @@ func NewVolcEngine(ctx context.Context, auth AuthConfig, voice VoiceConfig, code
 // ------------------------ EventHandler 实现 ------------------------
 
 // OnOpen 实现 EventHandler 接口，连接建立时调用
-func (e *VolcEngine) OnOpen(c *ws.WSClient) {
+func (e *VolcEngine) OnOpen(client interface{}) {
 	msg := NewMessageBuilder().
 		WithEventType(EventType_StartConnection).
 		WithPayload([]byte("{}")).
 		Build()
 
 	frame, _ := msg.Marshal()
-	c.SendText(frame)
+	e.client.Send(context.Background(), frame)
 }
 
-func (e *VolcEngine) OnMessage(c *ws.WSClient, msgType int, msg []byte) {
+func (e *VolcEngine) OnMessage(c websocket.WsClient, msgType int, msg []byte) {
 	protocolMsg, err := NewMessageFromBytes(msg)
 	if err != nil {
 		logrus.Warnf("volc: failed to parse message: %v", err)
@@ -193,15 +232,15 @@ func (e *VolcEngine) OnMessage(c *ws.WSClient, msgType int, msg []byte) {
 	e.dispatch(protocolMsg)
 }
 
-func (e *VolcEngine) OnError(c *ws.WSClient, err error) {
-	if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+func (e *VolcEngine) OnError(c websocket.WsClient, err error) {
+	if gorilla.IsCloseError(err, gorilla.CloseNormalClosure) {
 		logrus.Info("volc: normal ws close")
 	} else {
 		logrus.Warnf("volce: ws close error: %v", err)
 	}
 }
 
-func (e *VolcEngine) OnClose(c *ws.WSClient) {
+func (e *VolcEngine) OnClose(c websocket.WsClient) {
 	logrus.Info("volc: connection closed")
 
 	e.mu.Lock()
@@ -328,11 +367,11 @@ func (e *VolcEngine) Synthesize(text string, contextTexts []string) error {
 	builder := NewRequestBuilder().
 		WithEvent(EventType_TaskRequest).
 		WithText(text)
-	
+
 	if len(contextTexts) > 0 {
 		builder = builder.WithContextTexts(contextTexts)
 	}
-	
+
 	req := builder.Build()
 	payload, _ := json.Marshal(req)
 
@@ -343,7 +382,7 @@ func (e *VolcEngine) Synthesize(text string, contextTexts []string) error {
 		Build()
 
 	frame, _ := msg.Marshal()
-	e.client.SendText(frame)
+	e.client.Send(context.Background(), frame)
 
 	logrus.Info("volc: send task request: ", string(payload))
 	return nil
@@ -362,11 +401,11 @@ func (e *VolcEngine) startSession(emotion string, contextTexts []string) error {
 		WithEvent(EventType_StartSession).
 		WithSpeaker(e.voice.Voice.VoiceType).
 		WithAudioParams(audioParams)
-	
+
 	if len(contextTexts) > 0 {
 		builder = builder.WithContextTexts(contextTexts)
 	}
-	
+
 	req := builder.Build()
 	payload, _ := json.Marshal(req)
 
@@ -377,7 +416,7 @@ func (e *VolcEngine) startSession(emotion string, contextTexts []string) error {
 		Build()
 
 	frame, _ := msg.Marshal()
-	e.client.SendText(frame)
+	e.client.Send(context.Background(), frame)
 
 	return nil
 }
@@ -390,7 +429,7 @@ func (e *VolcEngine) finishSession() {
 		Build()
 
 	frame, _ := msg.Marshal()
-	e.client.SendText(frame)
+	e.client.Send(context.Background(), frame)
 }
 
 func (e *VolcEngine) handleSentenceEnd(payload []byte) {
